@@ -2125,7 +2125,7 @@ test_unprovable_retypes_carry_only_the_new_items() {
 # ever typed must NOT be cleared by a later confirmed flush that did not carry
 # it. A confirmed flush clears exactly the items in its own digest.
 test_confirmed_flush_keeps_items_it_did_not_carry() {
-  local dir state sent
+  local dir state sent rc
   dir=$(make_supercase per-item-not-dropped)
   state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
   afk_enter "$state"
@@ -2146,7 +2146,9 @@ test_confirmed_flush_keeps_items_it_did_not_carry() {
   escalate_add "$state" "blocked: unproven-item"
   _flush_pane 1 && fail "a busy unverified pane confirmed a delivery it cannot prove"
   escalate_add "$state" "done: proven-item"
-  _flush_pane 0 || fail "an idle pane did not confirm a delivery its submit read empty"
+  _flush_pane 0
+  rc=$?
+  [ "$rc" -eq 3 ] || fail "a flush that delivered one item while another stayed buffered reported $rc, not the partly-delivered code its caller needs"
 
   assert_contains "$(tail -1 "$sent")" 'done: proven-item' "the confirmed flush did not carry the new escalation"
   grep -F 'blocked: unproven-item' "$state/.subsuper-escalations" >/dev/null \
@@ -2162,6 +2164,63 @@ test_confirmed_flush_keeps_items_it_did_not_carry() {
   [ ! -e "$state/.subsuper-escalations.since" ] || fail "a fully drained buffer kept its age sidecar, so the next item would look old on arrival"
   unset -f _flush_pane
   pass "escalate_flush: a confirmed flush clears only what it carried and re-sends what only an unproven attempt typed"
+}
+
+# A flush can now confirm only PART of the buffer: the items it carried land
+# while an item an earlier unprovable attempt typed stays buffered and
+# unconfirmed. A caller that reads that as full success logs a recovery that did
+# not happen and drops the durable wedge evidence while the wedge condition still
+# holds - the same misleading report as telling the captain nothing was delivered
+# when something was. The marker has to outlive every outstanding item.
+test_partly_delivered_flush_is_not_reported_as_recovery() {
+  local dir state sent daemon_log
+  dir=$(make_supercase partial-flush-report)
+  state="$dir/state"; sent="$dir/sent.log"; daemon_log="$dir/daemon.log"
+  : > "$sent"; : > "$daemon_log"
+  afk_enter "$state"
+  _report_window() {  # <want-busy 0|1>
+    local want_busy=$1
+    (
+      fm_backend_target_exists() { return 0; }
+      pane_is_busy() { [ "$want_busy" = 1 ]; }
+      fm_backend_composer_state() { printf 'empty'; }
+      fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+      LOG="$daemon_log" FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux \
+        FM_SUPERVISOR_TARGET="fakepane" FM_ESCALATE_BATCH_SECS=99999 FM_MAX_DEFER_SECS=60 \
+        housekeeping "$state"
+    ) || fail "max-defer housekeeping window failed"
+  }
+
+  escalate_add "$state" "blocked: alpha"
+  echo $(( $(date +%s) - 600 )) > "$state/.subsuper-escalations.since"
+  _report_window 1
+  [ -s "$state/.subsuper-inject-wedged" ] || fail "the unprovable attempt did not raise the wedge alarm"
+
+  # The primary goes idle with a newer item buffered: the flush confirms bravo and
+  # keeps alpha, which nothing has ever confirmed.
+  escalate_add "$state" "done: bravo"
+  touch -t 202001010000 "$state/.subsuper-inject-wedged"
+  _report_window 0
+  assert_contains "$(tail -1 "$sent")" 'done: bravo' "the idle window did not deliver the newer escalation"
+  grep -F 'blocked: alpha' "$state/.subsuper-escalations" >/dev/null \
+    || fail "the partly delivered flush dropped the item it never confirmed"
+  [ -s "$state/.subsuper-inject-wedged" ] \
+    || fail "the wedge marker was removed while an unconfirmed item was still buffered, so the captain loses the wedge evidence"
+  grep -F 'inject recovered: max-defer flush succeeded' "$daemon_log" >/dev/null \
+    && fail "a partly delivered flush was reported as a recovery, asserting a delivery that never happened for the retained item"
+
+  # The other direction: a flush that really does empty the buffer still reports
+  # recovery and still clears the marker.
+  touch -t 202001010000 "$state/.subsuper-inject-wedged"
+  _report_window 0
+  assert_contains "$(tail -1 "$sent")" 'blocked: alpha' "the follow-up window did not deliver the retained item"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "the buffer never drained once every item was confirmed"
+  [ ! -e "$state/.subsuper-inject-wedged" ] \
+    || fail "the wedge marker outlived a flush that left nothing outstanding"
+  grep -F 'inject recovered: max-defer flush succeeded' "$daemon_log" >/dev/null \
+    || fail "a flush that emptied the buffer no longer reports recovery"
+  unset -f _report_window
+  pass "max-defer: recovery is reported and the wedge marker dropped only once nothing is left outstanding"
 }
 
 # Delivery must not depend on an external hashing tool. _hash_text falls back to
@@ -2537,6 +2596,7 @@ test_idle_visible_queue_harness_still_confirms_and_clears
 test_max_defer_alarms_without_retyping_already_typed_items
 test_unprovable_retypes_carry_only_the_new_items
 test_confirmed_flush_keeps_items_it_did_not_carry
+test_partly_delivered_flush_is_not_reported_as_recovery
 test_busy_delivery_needs_no_external_hash_tool
 test_confirmed_flush_clears_the_typed_digest_record
 test_busy_claude_recovers_a_swallowed_first_enter

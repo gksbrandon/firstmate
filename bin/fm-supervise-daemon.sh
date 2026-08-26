@@ -677,8 +677,16 @@ _escalate_typed() {  # <buffer> <typed-record> -> items an unprovable attempt ty
 }
 
 # Flush the escalation buffer as ONE batched, single-line digest to the
-# supervisor pane. Returns 0 on successful inject (or empty buffer), non-zero on
-# inject failure (buffer preserved for retry / catch-up).
+# supervisor pane. The return code says what the BUFFER now holds, because a
+# caller cannot see that for itself and reading 0 as "nothing is outstanding" is
+# what makes a partial flush look like a recovery:
+#   0  nothing is outstanding - the buffer is empty and its wedge marker dropped
+#      (an empty buffer on entry says the same thing).
+#   3  partly delivered - the items this digest carried are confirmed and gone,
+#      and items an earlier unprovable attempt typed are STILL buffered and still
+#      unconfirmed, so the wedge condition holds and the marker stands.
+#   1  nothing was delivered; the whole buffer is preserved for the next cycle or
+#      the catch-up flush.
 # <mode> is inject_msg's busy-guard mode: `normal` for an ordinary tick, and
 # `max-defer` for housekeeping's escape after FM_MAX_DEFER_SECS.
 #
@@ -731,7 +739,7 @@ escalate_flush() {  # <state> [mode]
     if [ -n "$rest" ]; then
       printf '%s\n' "$rest" > "$buf"
       rm -f "$typed"
-      return 0
+      return 3
     fi
   fi
   : > "$buf"
@@ -1035,7 +1043,9 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #     attempt one delivery in max-defer mode, which also stops waiting out a busy
 #     pane on a harness with no verified queueing behavior; that attempt keeps the
 #     buffer and always alarms, since it cannot be proven. Never silently defer
-#     forever, and never clear the buffer on an unproven delivery.
+#     forever, and never clear the buffer on an unproven delivery. Recovery is
+#     only reported, and the wedge marker only dropped, when the flush leaves
+#     nothing outstanding.
 #  2) stale recheck: for each pending stale marker past STALE_ESCALATE_SECS,
 #     re-peek the pane; still idle -> escalate (wedge); resumed -> clear marker.
 #  2b) pause re-surface: for each declared-wait marker past PAUSE_RESURFACE_SECS,
@@ -1073,16 +1083,27 @@ housekeeping() {  # <state>
   if afk_active "$state" && [ "$max_defer" -gt 0 ] && [ -s "$state/.subsuper-escalations" ]; then
     oldest=$(_oldest_line_age "$state/.subsuper-escalations")
     # Throttle the alarm to once per max-defer window (the wedge marker doubles
-    # as the throttle). A successful flush clears the buffer; a failed one alarms
-    # and waits.
+    # as the throttle). Only a flush that leaves NOTHING outstanding is a
+    # recovery. A flush that confirmed the items it carried while items an
+    # earlier unprovable attempt typed are still buffered has not recovered
+    # anything for those items, so it keeps the alarm and the durable marker
+    # exactly like a flush that delivered nothing.
     if [ "$oldest" -ge "$max_defer" ] \
        && [ "$(_file_age "$state/.subsuper-inject-wedged")" -ge "$max_defer" ]; then
-      if escalate_flush "$state" max-defer; then
-        log "inject recovered: max-defer flush succeeded after ${oldest}s undelivered"
-        rm -f "$state/.subsuper-inject-wedged"
-      else
-        inject_wedge_alarm "$state" "$oldest"
-      fi
+      escalate_flush "$state" max-defer
+      case $? in
+        0)
+          log "inject recovered: max-defer flush succeeded after ${oldest}s undelivered"
+          rm -f "$state/.subsuper-inject-wedged"
+          ;;
+        3)
+          log "inject partly recovered after ${oldest}s undelivered: the max-defer flush confirmed the items it carried, but items only an unprovable attempt ever typed are still buffered and unconfirmed, so the wedge alarm stands"
+          inject_wedge_alarm "$state" "$oldest"
+          ;;
+        *)
+          inject_wedge_alarm "$state" "$oldest"
+          ;;
+      esac
     fi
   fi
 
