@@ -929,7 +929,7 @@ inject_wedge_alarm() {  # <state> <age-seconds>
   fi
   {
     printf 'fm away-mode inject WEDGED: %ss undelivered as of %s\n' "$age" "$(date '+%Y-%m-%dT%H:%M:%S%z')"
-    printf 'The supervisor pane could not accept an escalation. Buffered items:\n'
+    printf 'Delivery to the supervisor pane could not be confirmed. The digest may have been typed and queued, so treat these as possibly-delivered rather than certainly lost. Buffered items:\n'
     cat "$state/.subsuper-escalations" 2>/dev/null
   } 2>/dev/null > "$marker" || true
   target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
