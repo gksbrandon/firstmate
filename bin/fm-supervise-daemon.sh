@@ -959,8 +959,9 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #     ESCALATE_BATCH_SECS (or batching is disabled), inject one digest.
 #  1b) max-defer escape: if the buffer is STILL undelivered past MAX_DEFER_SECS,
 #     attempt one delivery in max-defer mode, which also stops waiting out a busy
-#     pane on a harness with no verified queueing behavior; if it cannot confirm,
-#     raise the wedge alarm. Never silently defer forever.
+#     pane on a harness with no verified queueing behavior; that attempt keeps the
+#     buffer and always alarms, since it cannot be proven. Never silently defer
+#     forever, and never clear the buffer on an unproven delivery.
 #  2) stale recheck: for each pending stale marker past STALE_ESCALATE_SECS,
 #     re-peek the pane; still idle -> escalate (wedge); resumed -> clear marker.
 #  2b) pause re-surface: for each declared-wait marker past PAUSE_RESURFACE_SECS,
@@ -988,8 +989,11 @@ housekeeping() {  # <state>
   # retry delivery in max-defer mode: a busy pane on a harness with no verified
   # queueing behavior waited for an idle window that never came, so this attempt
   # goes ahead under the unchanged composer guard and verified submit rather than
-  # waiting forever. If it still cannot confirm, raise a loud wedge alarm while
-  # preserving the buffer.
+  # waiting forever. That attempt reports non-zero even when the submit reads
+  # empty, so the alarm below always fires and the buffer always survives it; the
+  # marker's own age then throttles the next attempt to one per max-defer window.
+  # Only a genuinely confirmed delivery (idle pane, or a verified queueing
+  # harness) clears the buffer.
   max_defer=${FM_MAX_DEFER_SECS:-$MAX_DEFER_SECS_DEFAULT}
   if afk_active "$state" && [ "$max_defer" -gt 0 ] && [ -s "$state/.subsuper-escalations" ]; then
     oldest=$(_oldest_line_age "$state/.subsuper-escalations")
@@ -1117,10 +1121,11 @@ window_for_task() {  # <task-key> [state]
 # inject_msg: send one escalation digest to the supervisor pane.
 # Returns 0 on successful inject (or empty buffer), non-zero if the pane is
 # gone, afk is inactive, the supervisor is busy on a harness not verified to
-# queue input (in `normal` mode; see the busy guard below for how that wait ends),
-# the composer is not affirmatively empty, or the verified submit cannot be
-# confirmed after bounded retries. On non-zero the caller preserves the buffer so
-# the escalation survives for the next cycle or the catch-up flush.
+# queue input (in `normal` mode it defers; in `max-defer` mode it types the digest
+# anyway but still returns non-zero, because that delivery cannot be proven), the
+# composer is not affirmatively empty, or the verified submit cannot be confirmed
+# after bounded retries. On non-zero the caller preserves the buffer so the
+# escalation survives for the next cycle or the catch-up flush.
 #
 # Submit model:
 #   - TYPE ONCE, then submit with Enter. Never retype the digest: a swallowed
@@ -1137,6 +1142,7 @@ window_for_task() {  # <task-key> [state]
 #     would merge with the human's text.
 inject_msg() {  # <message> [state] [normal|max-defer]
   local msg=$1 state mode target backend retries sleep_s verdict composer encoded harness
+  local busy= unproven=
   state="${2:-$(_state_root)}"
   mode="${3:-normal}"
   # (1) Presence-gate: inject ONLY when afk is active. When afk is off, the
@@ -1158,35 +1164,44 @@ inject_msg() {  # <message> [state] [normal|max-defer]
   # discovery), matching this function's pre-existing default assumption.
   backend="${FM_SUPERVISOR_BACKEND:-tmux}"
   fm_backend_target_exists "$backend" "$target" || return 1
-  # (3) Busy-guard: a busy supervisor pane is a WAIT, never a refusal. An
-  #     absolute refusal here is what wedged the 2026-08-26 away stretch: a
+  # (3) Busy-guard: a busy supervisor pane is a WAIT, never a permanent refusal.
+  #     An absolute refusal here is what wedged the 2026-08-26 away stretch: a
   #     firstmate primary can stay mid-turn for over an hour, so "wait for an
-  #     idle pane" means "never deliver". Two ways past a busy pane, both of
-  #     which still face the composer guard below and the proof-carrying submit:
+  #     idle pane" means "never deliver". Three outcomes, all of which still face
+  #     the composer guard below and the proof-carrying submit:
   #
   #       a) The primary harness is VERIFIED to queue a submitted line as its
   #          next turn (fm_composer_busy_queues_input, bin/fm-composer-lib.sh,
-  #          which owns the set). Deliver immediately, mid-turn.
-  #       b) Every other harness waits for an idle window instead, because
-  #          queueing is vendor behavior and cannot be assumed. That wait is
-  #          BOUNDED: housekeeping's max-defer escape re-enters here with
-  #          mode=max-defer once the buffer passes FM_MAX_DEFER_SECS, and
-  #          attempts delivery anyway rather than deferring forever.
+  #          which owns the set). Deliver immediately, mid-turn, and a confirmed
+  #          submit clears the buffer as usual.
+  #       b) Any other harness waits for an idle window, because queueing is
+  #          vendor behavior and cannot be assumed. The wait is BOUNDED:
+  #          housekeeping's max-defer escape re-enters with mode=max-defer once
+  #          the buffer passes FM_MAX_DEFER_SECS and types the digest anyway.
+  #          That attempt is UNPROVEN and never clears the buffer: an empty
+  #          composer after Enter cannot distinguish "queued as the next turn"
+  #          from "discarded mid-turn and redrawn" on a harness nobody measured,
+  #          so this returns non-zero whatever the verdict. escalate_flush keeps
+  #          the buffer and housekeeping raises inject_wedge_alarm, preserving
+  #          the defer-and-alarm visibility this path had before the escape
+  #          existed. Duplicates over loss, the same posture as an unconfirmed
+  #          submit on the idle path.
+  #       c) Below max-defer, an unverified harness simply defers.
   #
-  #     So the harness boundary decides how LONG a busy pane delays an
-  #     escalation, not whether it ever arrives. This matters on the
-  #     terminal-backed launcher path (bin/fm-afk-launch.sh), where the captain's
-  #     harness is passed in and tmux has no native busy state, so the rendered
-  #     signature is the whole busy verdict for codex, kimi, muse, and cursor.
-  #     Deferral is reserved for state that cannot be read safely at all, which
-  #     is the composer guard's job below and which still alarms via
-  #     inject_wedge_alarm.
+  #     The rendered signature is the whole busy verdict on the terminal-backed
+  #     launcher path (bin/fm-afk-launch.sh passes the captain's harness in;
+  #     tmux has no native busy state), which covers codex, kimi, and cursor.
+  #     muse has NO arm in fm_busy_lines_match, so it never reads busy there at
+  #     all and is injected into on any tick; registering a muse signature needs
+  #     live verification against the real harness and is not done here.
   if pane_is_busy "$target" "$backend"; then
     harness=$(fm_daemon_primary_harness)
+    busy=1
     if fm_composer_busy_queues_input "$harness"; then
       log "inject into a busy supervisor pane: $harness queues a submitted line as its next turn"
     elif [ "$mode" = max-defer ]; then
-      log "inject into a busy supervisor pane past max-defer: $harness has no verified queueing behavior, so delivery waited for an idle window and none came; the composer guard and the verified submit still gate this attempt"
+      unproven=1
+      log "inject attempt into a busy supervisor pane past max-defer: $harness has no verified queueing behavior, so the buffer is preserved and the wedge alarm raised whatever the submit reports"
     else
       log "inject deferred: supervisor pane busy (agent mid-turn)"
       return 1
@@ -1213,9 +1228,30 @@ inject_msg() {  # <message> [state] [normal|max-defer]
   # Dispatches through fm_backend_send_text_submit (bin/fm-backend.sh): for
   # backend=tmux this calls fm_backend_tmux_send_text_submit, a verbatim
   # re-export of fm_tmux_submit_core - byte-identical to calling it directly.
+  #
+  # ONE Enter into a busy pane, whatever the configured budget. A busy pane is
+  # exactly where Enter QUEUES instead of submitting-and-clearing, so each extra
+  # Enter is a plausible extra queued turn: opencode keeps its typed text visible
+  # until the running turn ends, so its composer reads `pending` on every pass and
+  # the retry budget is spent in full before fm_composer_queued_enter_verdict
+  # converts it, which would deliver the captain the same digest once per retry.
+  # Claude clears its composer and confirms on the first Enter, so it never spends
+  # the budget and the cap costs it nothing. This is scoped to away-mode injection:
+  # INJECT_CONFIRM_RETRIES_DEFAULT and the shared submit cores' retry contract are
+  # unchanged for every other caller, including the idle path here.
   retries=${FM_INJECT_CONFIRM_RETRIES:-$INJECT_CONFIRM_RETRIES_DEFAULT}
+  [ -z "$busy" ] || retries=1
   sleep_s=${FM_INJECT_CONFIRM_SLEEP:-$INJECT_CONFIRM_SLEEP_DEFAULT}
   verdict=$(fm_backend_send_text_submit "$backend" "$target" "$msg" "$retries" "$sleep_s" "$sleep_s")
+  # (5) The max-defer attempt into an unverified busy harness is never
+  # buffer-clearing confirmation, however the submit reads. Returning non-zero is
+  # what keeps the buffer in escalate_flush and raises the wedge alarm in
+  # housekeeping, so a stall stays visible and an escalation is never dropped on
+  # an unproven `empty`.
+  if [ -n "$unproven" ]; then
+    log "inject unproven: typed one digest into a busy $harness pane past max-defer (verdict=$verdict); an empty composer is not proof an unverified harness queued the line rather than discarding it, so the buffer stays and the wedge alarm fires"
+    return 1
+  fi
   if [ "$verdict" = empty ]; then
     return 0  # Backend confirmed the submit.
   fi

@@ -1881,10 +1881,17 @@ test_inject_msg_busy_pane_still_honors_the_composer_guard() {
 
 # A busy pane on an UNVERIFIED harness is a wait, not a refusal. tmux exposes no
 # native busy state, so on the terminal-backed launcher path the rendered
-# signature is the whole busy verdict for codex, kimi, muse, and cursor: without
-# a bounded wait, handing the daemon the captain's real harness would trade
+# signature is the whole busy verdict for codex, kimi, and cursor: without a
+# bounded wait, handing the daemon the captain's real harness would trade
 # claude's wedge for theirs. housekeeping's max-defer escape is what bounds it.
-test_max_defer_delivers_into_a_busy_unverified_harness() {
+#
+# But an unmeasured harness may discard mid-turn input and redraw an empty
+# composer, which is indistinguishable from having queued the line. So the
+# attempt happens and is NEVER counted as confirmation: strict-preserve, a
+# duplicate over a loss, and the stall stays visible. The fake submit below
+# reports the most dangerous verdict, `empty`, precisely because that is the one
+# that would otherwise truncate the buffer and drop a captain escalation.
+test_max_defer_attempts_but_never_confirms_a_busy_unverified_harness() {
   local dir state sent
   dir=$(make_supercase maxdefer-busy-unverified)
   state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
@@ -1900,10 +1907,44 @@ test_max_defer_delivers_into_a_busy_unverified_harness() {
       FM_ESCALATE_BATCH_SECS=99999 FM_MAX_DEFER_SECS=60 housekeeping "$state"
   ) || fail "max-defer busy-unverified housekeeping subshell failed"
   grep -F 'pick A' "$sent" >/dev/null \
-    || fail "max-defer never delivered into a busy pane on a harness with no verified queueing behavior"
-  [ ! -s "$state/.subsuper-escalations" ] || fail "buffer not cleared after a delivered max-defer flush"
-  [ ! -e "$state/.subsuper-inject-wedged" ] || fail "a delivered max-defer flush still raised a wedge alarm"
-  pass "max-defer: a busy pane on an unverified harness delivers rather than deferring forever"
+    || fail "max-defer never attempted delivery into a busy pane on a harness with no verified queueing behavior"
+  grep -F 'pick A' "$state/.subsuper-escalations" >/dev/null \
+    || fail "an unproven max-defer submit reporting empty cleared the buffer, silently losing the escalation"
+  [ -s "$state/.subsuper-inject-wedged" ] \
+    || fail "an unproven max-defer delivery did not raise the wedge alarm, so the stall is invisible"
+  grep -F 'pick A' "$state/.subsuper-inject-wedged" >/dev/null \
+    || fail "the wedge marker does not carry the still-undelivered escalation"
+  pass "max-defer: a busy unverified harness is attempted, never confirmed; buffer survives an 'empty' verdict and the alarm fires"
+}
+
+# One Enter into a busy pane, whatever the budget. A busy pane is where Enter
+# QUEUES rather than submitting-and-clearing, so a second Enter is a second
+# queued turn: opencode keeps its text visible while queued, reads pending on
+# every pass, and would otherwise spend the whole retry budget and hand the
+# captain the same digest once per retry.
+test_inject_msg_sends_one_enter_into_a_busy_pane() {
+  local dir state seen
+  dir=$(make_supercase inject-busy-one-enter)
+  state="$dir/state"; seen="$dir/retries.log"; : > "$seen"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf '%s\n' "$4" >> "$seen"; printf 'empty'; }
+    pane_is_busy() { return 0; }
+    FM_DAEMON_PRIMARY_HARNESS=opencode FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      FM_INJECT_CONFIRM_RETRIES=3 inject_msg "busy digest" "$state" \
+      || fail "inject_msg should deliver into a busy opencode pane whose composer is affirmatively empty"
+    pane_is_busy() { return 1; }
+    FM_DAEMON_PRIMARY_HARNESS=opencode FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      FM_INJECT_CONFIRM_RETRIES=3 inject_msg "idle digest" "$state" \
+      || fail "inject_msg should deliver into an idle opencode pane"
+  ) || fail "one-Enter busy cap inject_msg subshell failed"
+  [ "$(head -1 "$seen")" = 1 ] \
+    || fail "a busy-pane injection was given a retry budget of $(head -1 "$seen"), so the digest could be Enter'd more than once into a harness that queues each Enter"
+  [ "$(sed -n 2p "$seen")" = 3 ] \
+    || fail "the idle path's configured retry budget was changed to $(sed -n 2p "$seen"); the cap must be scoped to a busy pane"
+  pass "inject_msg: exactly one Enter into a busy pane, while the idle path keeps its configured retry budget"
 }
 
 # The escape ends the wait; it never lowers the composer bar. A busy pane whose
@@ -2122,8 +2163,9 @@ test_pane_input_pending_herdr_dispatch
 test_inject_msg_herdr_busy_guard_defers
 test_inject_msg_busy_pane_delivers_for_a_queueing_harness
 test_inject_msg_busy_pane_still_honors_the_composer_guard
-test_max_defer_delivers_into_a_busy_unverified_harness
+test_max_defer_attempts_but_never_confirms_a_busy_unverified_harness
 test_max_defer_busy_unverified_still_alarms_on_an_unreadable_composer
+test_inject_msg_sends_one_enter_into_a_busy_pane
 test_inject_msg_herdr_composer_guard_defers
 test_inject_msg_herdr_pane_gone_defers
 test_inject_msg_herdr_submits_through_backend_dispatch

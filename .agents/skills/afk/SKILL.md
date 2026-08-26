@@ -97,10 +97,14 @@ pane" below):
   A busy pane is a **wait, never a refusal**: it decides how long an escalation is delayed, not whether it ever arrives.
   That distinction exists because a firstmate primary can stay mid-turn for hours, so waiting for an idle pane means never delivering: on 2026-08-26 every escalation buffered for 71 minutes behind an absolute refusal.
   `fm_composer_busy_queues_input` (`bin/fm-composer-lib.sh`) owns the set of primary harnesses verified to queue a submitted line as their next turn: **claude** (live, 2026-08-26) and **opencode** (1.18.4, the same queued-Enter behavior the submit cores already carry an exception for).
-  Those two are injected into immediately, mid-turn.
-  Every other primary (**codex, pi, grok, kimi, muse, cursor**) waits for an idle window instead, because queueing is vendor behavior and cannot be assumed from another harness's proof.
-  That wait is bounded by the max-defer escape below, which delivers anyway rather than waiting forever, so no primary is silently starved.
+  Those two are injected into immediately, mid-turn, and a confirmed submit clears the buffer as usual.
+  Every other primary (**codex, pi, grok, kimi, cursor**) waits for an idle window instead, because queueing is vendor behavior and cannot be assumed from another harness's proof.
+  That wait is bounded by the max-defer escape below, which types the digest anyway rather than waiting forever, but never counts it as confirmation: the buffer survives and the wedge alarm fires regardless of what the submit reports, because an empty composer cannot tell "queued" from "discarded and redrawn" on a harness nobody measured.
+  So no primary is silently starved and none is silently dropped.
+  **muse** is the exception to that list: it has no arm in `fm_busy_lines_match`, so it has **no registered busy signature on the rendered path** and never reads busy there at all, which means a muse primary on tmux is injected into on any tick with no bounded wait and no queueing proof.
+  Registering a muse signature needs live verification against the real harness.
   The boundary matters most on the terminal-backed launcher path (`bin/fm-afk-launch.sh` passes the captain's harness in as `FM_DAEMON_PRIMARY_HARNESS`), where tmux has no native busy state and the rendered signature is the whole busy verdict.
+  Only one Enter is ever sent into a busy pane, whatever the configured retry budget, because each extra Enter into a harness that queues on Enter is a plausible duplicate escalation.
   The composer guard below and the verified submit, not the harness set, are what keep any of these injections safe.
 - **Composer-state guard** - `inject_msg` reads the full `empty`/`pending`/`pending-unproven`/`unknown` verdict from `fm_backend_composer_state` and injects only when it is affirmatively `empty`.
   Every other or future verdict defers, including an unreadable pane, ambiguous geometry, a blank unidentified row, and a bare shell prompt left after the agent exits.
@@ -114,7 +118,8 @@ In afk mode the composer guard is belt-and-suspenders (no human is typing), but 
 **Max-defer escape (the daemon must never silently wedge).**
 If anything stays buffered past `FM_MAX_DEFER_SECS` (default 300), the daemon
 attempts one flush in max-defer mode, which still requires an affirmatively empty composer but no longer waits out a busy pane on an unverified harness.
-That is how a non-queueing primary's wait ends in delivery rather than a stall.
+That is how a non-queueing primary's wait ends in a delivery attempt rather than a stall.
+Such an attempt never clears the buffer and always alarms, so the pre-existing defer-and-alarm visibility is kept and a duplicate is preferred to a lost escalation; the marker's age then throttles the next attempt to one per max-defer window.
 The alarm is defense in depth rather than a substitute for keeping every supported composer injectable.
 If that submit cannot be confirmed, it raises a loud, rate-limited wedge alarm:
 an ERROR in the daemon log, a durable
@@ -189,7 +194,9 @@ the operational prefix lets firstmate distinguish it from a real captain message
 - **Max-defer escape** - the daemon must never silently wedge. If anything stays
   buffered past `FM_MAX_DEFER_SECS` (default 300s), the daemon attempts one
   max-defer flush, which still requires an affirmatively empty composer but stops
-  waiting out a busy pane on a harness with no verified queueing behavior. If that
+  waiting out a busy pane on a harness with no verified queueing behavior. That
+  busy attempt is never counted as confirmation, so it keeps the buffer and alarms
+  whatever the submit reports. If a flush
   cannot confirm a submit, it raises a loud, rate-limited wedge alarm: ERROR log,
   durable `state/.subsuper-inject-wedged` marker, a tmux status-line flash when
   applicable, and a backend-independent active alert. A

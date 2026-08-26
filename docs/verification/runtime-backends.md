@@ -314,8 +314,12 @@ A Claude pane parked on a permission dialog was measured the same day: `agent ge
 
 `bin/fm-composer-lib.sh` records the harnesses verified to queue.
 OpenCode is the second entry, and it is admitted on the evidence already pinned above rather than on a new measurement: OpenCode 1.18.4 accepts a mid-turn Enter and queues it for after the current turn, which is the exact property this set gates on, and is why both submit cores already carry a queued-Enter exception for it.
-The two entries differ only in what the post-Enter composer shows, which changes how delivery is confirmed and not whether it happens: Claude clears its composer, so the submit reads `empty` directly, while OpenCode keeps the typed text visible until the turn ends and reaches the same confirmation through `fm_composer_queued_enter_verdict`.
-An unlisted harness is not assumed to queue and waits for an idle window instead, but that wait is bounded: `bin/fm-supervise-daemon.sh`'s max-defer escape attempts delivery anyway once the buffer passes `FM_MAX_DEFER_SECS`, under the same composer guard and verified submit, so no primary is silently starved.
+The two entries differ only in what the post-Enter composer shows, which changes how delivery is confirmed and not whether it happens: Claude clears its composer, so the submit reads `empty` directly and returns on the first Enter, while OpenCode keeps the typed text visible until the turn ends, reads `pending` on every pass, and reaches the same confirmation through `fm_composer_queued_enter_verdict` once the retry budget is spent.
+Because each Enter into a harness that queues on Enter is a plausible extra queued turn, away-mode injection sends exactly one Enter into a busy pane whatever its configured budget, so OpenCode cannot receive the same digest once per retry; Claude is unaffected because it never spends the budget.
+That cap is scoped to `inject_msg`; `INJECT_CONFIRM_RETRIES_DEFAULT` and the shared submit cores' retry contract are unchanged.
+An unlisted harness is not assumed to queue and waits for an idle window instead, but that wait is bounded: `bin/fm-supervise-daemon.sh`'s max-defer escape types the digest anyway once the buffer passes `FM_MAX_DEFER_SECS`, under the same composer guard and verified submit.
+That attempt is never treated as confirmation, since an empty composer on an unmeasured harness cannot distinguish a queued line from a discarded one, so the buffer survives and the wedge alarm fires regardless of the verdict.
+No primary is therefore silently starved, and none is silently dropped.
 Refresh the live proof with:
 
 ```sh

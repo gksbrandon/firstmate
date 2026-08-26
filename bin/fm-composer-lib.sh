@@ -1356,17 +1356,26 @@ fm_composer_queued_enter_verdict() {  # <composer-state> <busy|idle|unknown>
 # predates this set: opencode 1.18.4 accepts a mid-turn Enter and queues it for
 # after the current turn, which is why the submit cores already carry a
 # queued-Enter exception for it (bin/fm-tmux-lib.sh, bin/backends/herdr.sh) and
-# why docs/tmux-backend.md and docs/verification/runtime-backends.md pin it. The
-# two differ only in what the post-Enter composer shows: claude clears it, while
-# opencode keeps the typed text visible until the turn ends, so opencode reaches
-# confirmation through fm_composer_queued_enter_verdict instead.
+# why docs/tmux-backend.md and docs/verification/runtime-backends.md pin it.
+#
+# The two differ in what the post-Enter composer shows, which changes how each is
+# CONFIRMED and how many Enters it costs. Claude clears its composer, so the
+# submit reads `empty` and returns on the first Enter. Opencode keeps the typed
+# text visible until the running turn ends, so it reads `pending` on every pass
+# and only converts once the retry budget is spent
+# (fm_composer_queued_enter_verdict). Each Enter into a harness that queues on
+# Enter is a plausible extra queued turn, which is why the away daemon types ONE
+# Enter into a busy pane regardless of its configured budget
+# (bin/fm-supervise-daemon.sh). Do not add a second conversion path for opencode;
+# the shared queued-Enter verdict already covers it.
 #
 # An unlisted harness does not wedge. It waits for an idle window, and
 # bin/fm-supervise-daemon.sh's max-defer escape attempts delivery anyway once the
 # wait passes FM_MAX_DEFER_SECS, under the same composer guard and proof-carrying
-# submit. Membership here buys immediate mid-turn delivery, not the only path to
-# it. Newline-separated and consumed by `read` for the same reasons as the glyph
-# sets above.
+# submit. That attempt is never treated as confirmation, so the buffer survives
+# and the wedge alarm fires. Membership here buys PROVEN mid-turn delivery that
+# can clear the buffer, not the only path to an attempt. Newline-separated and
+# consumed by `read` for the same reasons as the glyph sets above.
 FM_COMPOSER_BUSY_QUEUEING_HARNESSES=$(printf '%s\n' 'claude' 'opencode')
 
 # fm_composer_busy_queues_input: 0 when <harness> is one of them. An empty or
