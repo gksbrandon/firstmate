@@ -48,9 +48,9 @@ fm_afk_start_usage() {
 
 # FM_AFK_DELIVERY_ARTIFACTS is the ONE list of session-scoped delivery artifacts,
 # consumed by the clear below and by every snapshot/rollback in
-# bin/fm-afk-launch.sh, so adding one (here, the typed-digest record that bounds
-# how often an unprovable delivery retypes the same digest) cannot be forgotten in
-# one site and leak stale state into the next session. bin/fm-afk-return.sh keeps
+# bin/fm-afk-launch.sh, so adding one (here, the record of which items an
+# unprovable delivery already typed into the pane) cannot be forgotten in one
+# site and leak stale state into the next session. bin/fm-afk-return.sh keeps
 # its own copy because sourcing this file would create the state directory and
 # break its read-only `guard` mode.
 FM_AFK_DELIVERY_ARTIFACTS=(

@@ -110,7 +110,9 @@ pane" below):
   Claude keeps its full retry budget: it clears its composer on a landed Enter, so `pending` means the Enter was swallowed and only a retry recovers it, while an extra Enter on an already-cleared composer is a no-op.
   Claude's busy delivery is therefore confirmed against the **composer**, not the submit verdict alone: the shared retries-exhausted conversion reads busy plus `pending` as a queued line, which would otherwise report a fully swallowed Enter budget as delivered.
   Only an affirmatively cleared composer counts there; anything else keeps the buffer and leaves the wedge alarm reachable.
-  Any attempt that cannot be proven is typed at most **once per distinct digest** (`state/.subsuper-inject-typed` records what was typed), so a multi-hour turn alarms every max-defer window without re-typing the same digest into the pane each time; a new escalation changes the digest and earns a fresh attempt.
+  Any attempt that cannot be proven is bounded **per item**, not per digest: `state/.subsuper-inject-typed` records the individual items that reached the pane, so a re-type after a new escalation carries only the new ones and each item is typed about once, however long the turn runs.
+  Without that the digest would grow while the buffer is kept, so N escalations would send N digests carrying N(N+1)/2 item copies, ending in one line holding everything.
+  Nothing is dropped by the bound: an item stays buffered, and stays in the wedge alarm, until a delivery is confirmed, and a confirmed flush clears only the items it actually carried, so an item that only an unprovable attempt ever typed is re-sent once the pane can confirm it.
   The composer guard below and the verified submit, not the harness set, are what keep any of these injections safe.
 - **Composer-state guard** - `inject_msg` reads the full `empty`/`pending`/`pending-unproven`/`unknown` verdict from `fm_backend_composer_state` and injects only when it is affirmatively `empty`.
   Every other or future verdict defers, including an unreadable pane, ambiguous geometry, a blank unidentified row, and a bare shell prompt left after the agent exits.
@@ -125,7 +127,7 @@ In afk mode the composer guard is belt-and-suspenders (no human is typing), but 
 If anything stays buffered past `FM_MAX_DEFER_SECS` (default 300), the daemon
 attempts one flush in max-defer mode, which still requires an affirmatively empty composer but no longer waits out a busy pane on an unverified harness.
 That is how a non-queueing primary's wait ends in a delivery attempt rather than a stall.
-Such an attempt never clears the buffer and always alarms, so the pre-existing defer-and-alarm visibility is kept and a duplicate is preferred to a lost escalation; the marker's age throttles the alarm to one per max-defer window, and the typed-digest record keeps an unchanged digest from being retyped in each of those windows.
+Such an attempt never clears the buffer and always alarms, so the pre-existing defer-and-alarm visibility is kept and a duplicate is preferred to a lost escalation; the marker's age throttles the alarm to one per max-defer window, and the per-item typed record keeps an already-typed item from being retyped in each of those windows.
 The alarm is defense in depth rather than a substitute for keeping every supported composer injectable.
 If that submit cannot be confirmed, it raises a loud, rate-limited wedge alarm:
 an ERROR in the daemon log, a durable

@@ -328,7 +328,10 @@ Away-mode injection therefore re-reads the composer after the submit on a busy p
 Both are scoped to `inject_msg`; `INJECT_CONFIRM_RETRIES_DEFAULT`, `fm_composer_queued_enter_verdict`, and the shared submit cores' retry contract are unchanged.
 An unlisted harness is not assumed to queue and waits for an idle window instead, but that wait is bounded: `bin/fm-supervise-daemon.sh`'s max-defer escape types the digest anyway once the buffer passes `FM_MAX_DEFER_SECS`, under the same composer guard and verified submit.
 That attempt is never treated as confirmation, since an empty composer on an unmeasured harness cannot distinguish a queued line from a discarded one, so the buffer survives and the wedge alarm fires regardless of the verdict.
-Every unprovable attempt is typed at most once per distinct digest: `state/.subsuper-inject-typed` holds a hash of what was last typed, so a turn that runs for hours alarms on its normal cadence without re-typing the same digest into the pane in every max-defer window, while a genuinely new escalation changes the digest and earns a fresh attempt.
+Every unprovable attempt is bounded per ITEM rather than per digest: `state/.subsuper-inject-typed` holds the individual items that reached the pane, so a re-type after a new escalation carries only the new ones.
+Bounding the whole digest instead would not bound the pane at all, because the buffer is kept and therefore grows: N escalations would send N digests carrying N(N+1)/2 item copies, the last a single line holding every item.
+The bound drops nothing, because an item stays buffered and stays in the wedge alarm until a delivery is confirmed, and a confirmed flush clears exactly the items it carried, so an item only an unprovable attempt ever typed is re-sent once the pane can confirm it.
+No external hashing tool is involved, so a host without `md5` or `md5sum` still delivers into a busy pane.
 No primary is therefore silently starved, and none is silently dropped.
 Refresh the live proof with:
 

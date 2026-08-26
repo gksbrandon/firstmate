@@ -51,6 +51,12 @@ SH
   chmod +x "$dir/bin/"*.sh
 }
 
+delivery_artifacts() {  # <case-dir> -> the artifact names bin/fm-afk-start.sh owns
+  local dir=$1
+  FM_HOME="$dir/home" FM_STATE_OVERRIDE="$dir/home/state" \
+    bash -c '. "$1"; printf "%s\n" "${FM_AFK_DELIVERY_ARTIFACTS[@]}"' _ "$ROOT/bin/fm-afk-start.sh"
+}
+
 run_return() {  # <case-dir> <mode>
   local dir=$1 mode=$2
   FM_HOME="$dir/home" FM_STATE_OVERRIDE="$dir/home/state" "$dir/bin/fm-afk-return.sh" "$mode" 2>&1
@@ -275,8 +281,45 @@ test_check_retries_recorded_terminal_teardown() {
   pass "check retries recorded terminal teardown and keeps catch-up gated until success"
 }
 
+# bin/fm-afk-return.sh spells the session-scoped delivery artifacts out instead of
+# sourcing bin/fm-afk-start.sh, whose FM_AFK_DELIVERY_ARTIFACTS is the one owner
+# every other clear, snapshot, and rollback consumes: sourcing it would create the
+# state directory and break the read-only refusal the `guard` mode advertises.
+# Nothing else holds the two lists together, so a name added to the array leaks
+# past the return-path clear and surfaces as stale state in the next away session.
+# This asks the array itself what the set is and requires the return to clear all
+# of it, which keeps the copies honest without sourcing.
+test_return_clears_every_owned_delivery_artifact() {
+  local dir artifact artifacts out survivors=''
+  dir="$TMP_ROOT/delivery-artifacts"
+  install_runner "$dir"
+  date +%s > "$dir/home/state/.afk"
+  : > "$dir/home/state/.fake-drain"
+  artifacts=$(delivery_artifacts "$dir") \
+    || fail "could not read FM_AFK_DELIVERY_ARTIFACTS from bin/fm-afk-start.sh"
+  [ -n "$artifacts" ] || fail "bin/fm-afk-start.sh reported no session-scoped delivery artifacts"
+  while IFS= read -r artifact; do
+    [ -n "$artifact" ] || continue
+    printf 'stale content from the previous away session\n' > "$dir/home/state/$artifact"
+  done <<EOF
+$artifacts
+EOF
+
+  out=$(run_return "$dir" begin) || fail "a clean return did not complete: $out"
+  while IFS= read -r artifact; do
+    [ -n "$artifact" ] || continue
+    [ -e "$dir/home/state/$artifact" ] && survivors="$survivors $artifact"
+  done <<EOF
+$artifacts
+EOF
+  [ -z "$survivors" ] \
+    || fail "the return path left session-scoped delivery artifacts behind, so they leak into the next away session:$survivors"
+  pass "return clears every delivery artifact bin/fm-afk-start.sh owns, not just the ones it happens to spell out"
+}
+
 test_return_gate_orders_catchup_before_bearings
 test_explicit_reclassification_requires_durable_reason
+test_return_clears_every_owned_delivery_artifact
 test_captain_decision_does_not_masquerade_as_firstmate_blocker
 test_evidence_publication_failure_preserves_wake_for_redrain
 test_away_reentry_refuses_pending_return_gate

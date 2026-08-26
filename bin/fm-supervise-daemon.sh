@@ -435,9 +435,9 @@ classify_unknown() {  # <reason>
 # --- stale marker + escalation buffer (stateful, but via explicit state dir) -
 # Marker:   state/.subsuper-stale-<key>   contains the epoch first seen idle.
 # Buffer:   state/.subsuper-escalations    one distilled line per escalation.
-# Typed:    state/.subsuper-inject-typed   hash of the last digest typed into the
-#           pane on a delivery that could not be proven, so an unchanged buffer
-#           is alarmed about rather than retyped once per max-defer window.
+# Typed:    state/.subsuper-inject-typed   the buffered items already typed into
+#           the pane on a delivery nothing could prove, so a later attempt
+#           carries only what has never been typed instead of the whole buffer.
 # Seen:     state/.subsuper-seen-status-<task>  last status line the scan
 #           escalated, so the catch-all does not re-fire the same terminal.
 
@@ -651,27 +651,92 @@ escalate_add() {  # <state> <distilled-item>
   printf '%s\n' "$item" >> "$buf"
 }
 
+_escalate_item_recorded() {  # <typed-record> <item>
+  local record=$1 item=$2 line
+  [ -s "$record" ] || return 1
+  while IFS= read -r line; do
+    [ "$line" = "$item" ] && return 0
+  done < "$record"
+  return 1
+}
+
+_escalate_untyped() {  # <buffer> <typed-record> -> items never typed into the pane
+  local buf=$1 record=$2 item
+  while IFS= read -r item; do
+    _escalate_item_recorded "$record" "$item" || printf '%s\n' "$item"
+  done < "$buf"
+  return 0
+}
+
+_escalate_typed() {  # <buffer> <typed-record> -> items an unprovable attempt typed
+  local buf=$1 record=$2 item
+  while IFS= read -r item; do
+    _escalate_item_recorded "$record" "$item" && printf '%s\n' "$item"
+  done < "$buf"
+  return 0
+}
+
 # Flush the escalation buffer as ONE batched, single-line digest to the
 # supervisor pane. Returns 0 on successful inject (or empty buffer), non-zero on
 # inject failure (buffer preserved for retry / catch-up).
 # <mode> is inject_msg's busy-guard mode: `normal` for an ordinary tick, and
 # `max-defer` for housekeeping's escape after FM_MAX_DEFER_SECS.
+#
+# An attempt nothing can PROVE never clears the buffer, and the buffer only
+# grows, so re-sending all of it every time would send N digests carrying
+# N(N+1)/2 item copies over N escalations, the last of them one line holding
+# everything. The typed record is per ITEM: a later attempt carries only the
+# items that have never reached the pane, so each item is typed about once. That
+# drops nothing. An item stays buffered, and stays in the wedge alarm, until a
+# delivery is CONFIRMED, and a confirmed flush clears exactly the items it
+# carried - never one that only an unprovable attempt ever typed.
 escalate_flush() {  # <state> [mode]
-  local state=$1 mode=${2:-normal} buf item n msg
+  local state=$1 mode=${2:-normal} buf typed items fresh newlines n msg rc rest
   buf="$state/.subsuper-escalations"
+  typed="$state/.subsuper-inject-typed"
   [ -s "$buf" ] || return 0
-  n=$(wc -l < "$buf" 2>/dev/null || echo 0)
-  # Join buffered items with the literal " | " separator into one digest line.
-  msg=$(awk 'NR>1{printf " | "} {printf "%s",$0} END{print ""}' "$buf" 2>/dev/null)
+  items=$(_escalate_untyped "$buf" "$typed")
+  if [ -n "$items" ]; then
+    fresh=new
+  else
+    # Nothing new since the last unprovable attempt. Offer the whole buffer
+    # anyway, because a pane that can now CONFIRM has to be able to deliver and
+    # clear it; inject_msg declines to retype it if this attempt is unprovable too.
+    items=$(cat "$buf")
+    fresh=already-typed
+  fi
+  newlines=${items//[!$'\n']/}
+  n=$(( ${#newlines} + 1 ))
+  # Join the items with the literal " | " separator into one digest line.
+  msg=$(printf '%s\n' "$items" | awk 'NR>1{printf " | "} {printf "%s",$0} END{print ""}')
   # Single-line wrapper: no embedded newlines (inject_msg also collapses as a
   # safety net, but keeping the source single-line makes the intent explicit).
   msg=$(printf 'Supervisor escalate (%s event(s)): %s (pre-read; re-arm not needed — watcher daemon-managed)' "$n" "$msg")
-  if inject_msg "$msg" "$state" "$mode"; then
-    : > "$buf"
-    rm -f "${buf}.since" "$state/.subsuper-inject-wedged" "$state/.subsuper-inject-typed"
-    return 0
+  inject_msg "$msg" "$state" "$mode" "$fresh"
+  rc=$?
+  if [ "$rc" -eq 2 ]; then
+    # Typed, but nothing could prove it landed. Record what reached the pane so
+    # the next attempt carries only genuinely new items. The buffer and the wedge
+    # alarm both stand, because a typed item is not a delivered one.
+    printf '%s\n' "$items" >> "$typed"
+    return 1
   fi
-  return 1
+  [ "$rc" -eq 0 ] || return 1
+  # Clear exactly what was delivered. Items an earlier unprovable attempt typed
+  # were NOT in this digest, so they stay buffered and the record is dropped,
+  # which makes them eligible again for the next flush - the one that can finally
+  # confirm them.
+  if [ "$fresh" = new ] && [ -s "$typed" ]; then
+    rest=$(_escalate_typed "$buf" "$typed")
+    if [ -n "$rest" ]; then
+      printf '%s\n' "$rest" > "$buf"
+      rm -f "$typed"
+      return 0
+    fi
+  fi
+  : > "$buf"
+  rm -f "${buf}.since" "$state/.subsuper-inject-wedged" "$typed"
+  return 0
 }
 
 # --- backend-independent active wedge alert ---------------------------------
@@ -1001,8 +1066,8 @@ housekeeping() {  # <state>
   # waiting forever. That attempt reports non-zero even when the submit reads
   # empty, so the alarm below always fires and the buffer always survives it; the
   # marker's own age then throttles the alarm to one per max-defer window, and
-  # inject_msg's typed-digest record stops an unchanged digest being retyped in
-  # every one of those windows. Only a genuinely confirmed delivery (idle pane, or
+  # escalate_flush's per-item typed record stops an item being retyped in every
+  # one of those windows. Only a genuinely confirmed delivery (idle pane, or
   # a busy harness that proves the Enter landed) clears the buffer.
   max_defer=${FM_MAX_DEFER_SECS:-$MAX_DEFER_SECS_DEFAULT}
   if afk_active "$state" && [ "$max_defer" -gt 0 ] && [ -s "$state/.subsuper-escalations" ]; then
@@ -1139,8 +1204,13 @@ window_for_task() {  # <task-key> [state]
 # after bounded retries, or a busy pane whose harness clears its composer on a
 # landed Enter still shows the digest afterwards. On non-zero the caller preserves
 # the buffer so the escalation survives for the next cycle or the catch-up flush.
-# An unprovable attempt is typed at most ONCE per distinct digest: the alarm keeps
-# its cadence while the same content is not retyped every window.
+# Returns the distinct code 2 for "typed into the pane, but nothing could prove
+# it landed", which is what lets escalate_flush record those items and carry only
+# never-typed ones next time. <new|already-typed> declares whether the digest
+# holds anything that has never reached the pane; an already-typed digest is not
+# retyped on an unprovable attempt, so the alarm keeps its cadence without one
+# more copy of what the pane already has. It defaults to `new`, so a caller that
+# says nothing always gets a delivery attempt.
 #
 # Submit model:
 #   - TYPE ONCE, then submit with Enter. Never retype the digest: a swallowed
@@ -1155,12 +1225,12 @@ window_for_task() {  # <task-key> [state]
 #     after dim/faint ghost text and borders are ignored (a human's half-typed
 #     line, or a previous injection's unsent text), defer entirely - injecting
 #     would merge with the human's text.
-inject_msg() {  # <message> [state] [normal|max-defer]
-  local msg=$1 state mode target backend retries sleep_s verdict composer encoded harness
-  local busy='' unproven='' typed_marker typed_sig
+inject_msg() {  # <message> [state] [normal|max-defer] [new|already-typed]
+  local msg=$1 state mode content target backend retries sleep_s verdict composer encoded harness
+  local busy='' unproven=''
   state="${2:-$(_state_root)}"
   mode="${3:-normal}"
-  typed_marker="$state/.subsuper-inject-typed"
+  content="${4:-new}"
   # (1) Presence-gate: inject ONLY when afk is active. When afk is off, the
   # daemon self-handles and stays quiet; firstmate drives the normal always-on
   # watcher triage. Escalations buffer and survive for the next catch-up flush.
@@ -1238,19 +1308,18 @@ inject_msg() {  # <message> [state] [normal|max-defer]
     fi
   fi
   # (3b) An unprovable attempt never clears the buffer, so without a bound it
-  # would retype the same digest on every flush that reaches here - once per
-  # max-defer window on the escape path, and once per batch tick on a busy
-  # visible-queue harness. Duplicates over loss buys ONE duplicate per genuinely
-  # new digest, not a copy per window across a multi-hour turn. Compare the digest
-  # CONTENT rather than a timestamp: unchanged content still returns non-zero, so
-  # housekeeping keeps alarming on its normal cadence and the stall stays exactly
-  # as visible, while new escalations change the digest and earn a fresh attempt.
-  if [ -n "$unproven" ]; then
-    typed_sig=$(_hash_text "$msg")
-    if [ "$typed_sig" = "$(cat "$typed_marker" 2>/dev/null || true)" ]; then
-      log "inject not retyped: the same digest was already typed into this busy $harness pane and could not be proven delivered; the buffer and the wedge alarm both stand, and a changed digest will be typed again"
-      return 1
-    fi
+  # would retype content on every flush that reaches here - once per max-defer
+  # window on the escape path, and once per batch tick on a busy visible-queue
+  # harness. escalate_flush keeps the per-item record and hands over a digest of
+  # only the items that have never reached the pane; when there are none it says
+  # so here, and a second copy of what the pane already holds adds no information.
+  # Duplicates over loss buys about ONE copy per item, not a copy per window
+  # across a multi-hour turn. Declining to retype changes nothing else: the buffer
+  # stays, housekeeping keeps alarming on its own cadence, and the stall stays
+  # exactly as visible.
+  if [ -n "$unproven" ] && [ "$content" = already-typed ]; then
+    log "inject not retyped: every buffered item was already typed into this busy $harness pane on an attempt nothing could prove; the buffer and the wedge alarm both stand, and a new escalation is typed as soon as one arrives"
+    return 1
   fi
   #   b) Composer-guard: inject ONLY into a confirmed-empty GENUINE agent
   #      composer. The shared classifier (fm_backend_composer_state ->
@@ -1299,12 +1368,11 @@ inject_msg() {  # <message> [state] [normal|max-defer]
   # confirmation, however the submit reads. Returning non-zero is what keeps the
   # buffer in escalate_flush and raises the wedge alarm in housekeeping, so a
   # stall stays visible and an escalation is never dropped on an unprovable
-  # verdict. Record what was typed so the next window alarms instead of retyping
-  # the same digest; a genuinely new digest hashes differently and is typed again.
+  # verdict. The distinct code 2 tells escalate_flush these items did reach the
+  # pane, so the next attempt carries only what has never been typed.
   if [ -n "$unproven" ]; then
-    printf '%s\n' "$typed_sig" 2>/dev/null > "$typed_marker" || true
     log "inject unproven: typed the digest once and spent up to $retries Enter(s) on a busy $harness pane (verdict=$verdict); $unproven, so the buffer stays and the wedge alarm fires"
-    return 1
+    return 2
   fi
   # (6) Confirm against the COMPOSER on a busy pane whose harness clears it on a
   # landed Enter. The submit cores' retries-exhausted conversion

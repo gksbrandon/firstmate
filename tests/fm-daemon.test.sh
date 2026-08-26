@@ -2025,12 +2025,11 @@ test_idle_visible_queue_harness_still_confirms_and_clears() {
 }
 
 # An attempt that can never be confirmed also never clears the buffer, so without
-# a bound it retypes the same digest in every max-defer window - roughly 96 copies
-# across an 8-hour turn, not the ONE duplicate the duplicates-over-loss tradeoff
-# buys. The bound is on CONTENT, not time: an unchanged digest keeps alarming on
-# the same cadence without being retyped, and a genuinely new escalation earns a
-# fresh attempt.
-test_max_defer_alarms_without_retyping_an_unchanged_digest() {
+# a bound it retypes in every max-defer window - roughly 96 times across an
+# 8-hour turn, not the ONE copy the duplicates-over-loss tradeoff buys. The bound
+# is per ITEM: an item already typed into the pane alarms on the same cadence
+# without being sent again, and a genuinely new escalation earns a fresh attempt.
+test_max_defer_alarms_without_retyping_already_typed_items() {
   local dir state sent typed
   dir=$(make_supercase maxdefer-retype-bound)
   state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
@@ -2052,27 +2051,154 @@ test_max_defer_alarms_without_retyping_an_unchanged_digest() {
   _run_maxdefer_window
   [ "$(grep -c 'Supervisor escalate' "$sent" 2>/dev/null || true)" -eq 1 ] \
     || fail "the first max-defer window did not type the digest exactly once"
-  [ -s "$typed" ] || fail "the first unprovable attempt recorded nothing, so the next window cannot tell the digest is unchanged"
+  grep -Fx 'needs-decision: pick F' "$typed" >/dev/null \
+    || fail "the first unprovable attempt recorded no item, so the next window cannot tell what the pane already has"
   [ -s "$state/.subsuper-inject-wedged" ] || fail "the first window did not alarm"
 
   # Reopen the window the way real time does, without waiting for it.
   touch -t 202001010000 "$state/.subsuper-inject-wedged"
   _run_maxdefer_window
   [ "$(grep -c 'Supervisor escalate' "$sent" 2>/dev/null || true)" -eq 1 ] \
-    || fail "the same digest was typed again into the pane; a long turn would queue one copy per max-defer window"
+    || fail "an already-typed item was typed again; a long turn would queue one copy per max-defer window"
   [ "$(_file_age "$state/.subsuper-inject-wedged")" -lt 60 ] \
     || fail "skipping the retype also silenced the wedge alarm, so the stall became invisible"
   grep -F 'pick F' "$state/.subsuper-escalations" >/dev/null || fail "buffer lost while re-alarming"
 
-  # New content is a genuinely different digest and must be attempted.
+  # A new escalation has never reached the pane and must be attempted.
   escalate_add "$state" "needs-decision: pick G"
   touch -t 202001010000 "$state/.subsuper-inject-wedged"
   _run_maxdefer_window
   [ "$(grep -c 'Supervisor escalate' "$sent" 2>/dev/null || true)" -eq 2 ] \
-    || fail "a genuinely new escalation was not typed, so the content bound suppressed real delivery"
+    || fail "a genuinely new escalation was not typed, so the per-item bound suppressed real delivery"
   grep -F 'pick G' "$sent" >/dev/null || fail "the retyped digest does not carry the new escalation"
   unset -f _run_maxdefer_window
-  pass "max-defer: an unchanged digest alarms without being retyped, while a new escalation is typed again"
+  pass "max-defer: an already-typed item alarms without being retyped, while a new escalation is typed again"
+}
+
+# The bound has to be per ITEM, not per digest. An unprovable attempt keeps the
+# buffer and the buffer only grows, so a digest-wide bound bounds nothing: the
+# pane receives A, then A | B, then A | B | C, which is N(N+1)/2 item copies over
+# N escalations and ends as one line holding everything, typed through send-keys
+# into a TUI composer.
+test_unprovable_retypes_carry_only_the_new_items() {
+  local dir state sent last
+  dir=$(make_supercase unprovable-per-item)
+  state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
+  afk_enter "$state"
+  _flush_unprovable() {
+    if (
+      fm_backend_target_exists() { return 0; }
+      pane_is_busy() { return 0; }
+      fm_backend_composer_state() { printf 'empty'; }
+      fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+      FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="fakepane" \
+        escalate_flush "$state" max-defer
+    ); then
+      fail "an unprovable busy delivery reported success and would have cleared the buffer"
+    fi
+  }
+
+  escalate_add "$state" "blocked: alpha"; _flush_unprovable
+  escalate_add "$state" "blocked: bravo"; _flush_unprovable
+  escalate_add "$state" "blocked: charlie"; _flush_unprovable
+
+  [ "$(grep -c 'Supervisor escalate' "$sent")" -eq 3 ] \
+    || fail "expected one typed digest per escalation, got $(grep -c 'Supervisor escalate' "$sent")"
+  [ "$(grep -c 'blocked: alpha' "$sent")" -eq 1 ] \
+    || fail "alpha reached the pane $(grep -c 'blocked: alpha' "$sent") times; every later digest is re-carrying it"
+  [ "$(grep -c 'blocked: bravo' "$sent")" -eq 1 ] \
+    || fail "bravo reached the pane $(grep -c 'blocked: bravo' "$sent") times"
+  last=$(tail -1 "$sent")
+  assert_contains "$last" 'blocked: charlie' "the last digest did not carry the newest escalation"
+  assert_not_contains "$last" 'blocked: alpha' "the last digest still carries every earlier item, so the typed line grows without bound"
+  assert_contains "$last" '(1 event(s))' "the digest miscounts the items it actually carries"
+
+  # Nothing is dropped by the bound: an unproven item stays buffered and stays in
+  # the alarm until a delivery is confirmed.
+  grep -F 'blocked: alpha' "$state/.subsuper-escalations" >/dev/null || fail "alpha was dropped from the buffer by an attempt nothing could prove"
+  grep -F 'blocked: charlie' "$state/.subsuper-escalations" >/dev/null || fail "charlie was dropped from the buffer"
+  unset -f _flush_unprovable
+  pass "escalate_flush: each escalation reaches a never-confirming pane once, and the buffer still holds them all"
+}
+
+# The other direction of the per-item record: an item only an unprovable attempt
+# ever typed must NOT be cleared by a later confirmed flush that did not carry
+# it. A confirmed flush clears exactly the items in its own digest.
+test_confirmed_flush_keeps_items_it_did_not_carry() {
+  local dir state sent
+  dir=$(make_supercase per-item-not-dropped)
+  state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
+  afk_enter "$state"
+  # The stub reads want_busy, not busy: inject_msg declares `local busy` and
+  # bash's dynamic scoping would otherwise resolve the stub's own flag to it.
+  _flush_pane() {  # <want-busy 0|1>
+    local want_busy=$1
+    (
+      fm_backend_target_exists() { return 0; }
+      pane_is_busy() { [ "$want_busy" = 1 ]; }
+      fm_backend_composer_state() { printf 'empty'; }
+      fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+      FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="fakepane" \
+        escalate_flush "$state" max-defer
+    )
+  }
+
+  escalate_add "$state" "blocked: unproven-item"
+  _flush_pane 1 && fail "a busy unverified pane confirmed a delivery it cannot prove"
+  escalate_add "$state" "done: proven-item"
+  _flush_pane 0 || fail "an idle pane did not confirm a delivery its submit read empty"
+
+  assert_contains "$(tail -1 "$sent")" 'done: proven-item' "the confirmed flush did not carry the new escalation"
+  grep -F 'blocked: unproven-item' "$state/.subsuper-escalations" >/dev/null \
+    || fail "a confirmed flush cleared an item only an unprovable attempt ever typed, so it was lost"
+  grep -F 'done: proven-item' "$state/.subsuper-escalations" >/dev/null \
+    && fail "the confirmed flush kept the item it actually delivered, so the captain gets it twice"
+  [ ! -e "$state/.subsuper-inject-typed" ] \
+    || fail "the typed record survived a confirmed flush, so the surviving item could never be re-sent"
+
+  _flush_pane 0 || fail "the retained unproven item was not re-sent once the pane could confirm it"
+  assert_contains "$(tail -1 "$sent")" 'blocked: unproven-item' "the follow-up flush did not carry the retained item"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "the buffer never drained after every item was confirmed"
+  [ ! -e "$state/.subsuper-escalations.since" ] || fail "a fully drained buffer kept its age sidecar, so the next item would look old on arrival"
+  unset -f _flush_pane
+  pass "escalate_flush: a confirmed flush clears only what it carried and re-sends what only an unproven attempt typed"
+}
+
+# Delivery must not depend on an external hashing tool. _hash_text falls back to
+# md5sum and produces an EMPTY signature when neither md5 nor md5sum is on PATH,
+# and an empty signature compared against an absent marker matched on the very
+# first attempt: the digest was never typed, the marker never written, and every
+# later window repeated the same early return while the log claimed the digest
+# had already been typed. That is a silent return to never delivering into a busy
+# pane, which is exactly what away-mode delivery exists to remove.
+test_busy_delivery_needs_no_external_hash_tool() {
+  local dir state sent toolbin tool src
+  dir=$(make_supercase no-hash-tool)
+  state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
+  toolbin="$dir/toolbin"; mkdir -p "$toolbin"
+  for tool in awk cat cut date grep mkdir rm sed stat tail touch tr wc; do
+    src=$(command -v "$tool" 2>/dev/null) && ln -sf "$src" "$toolbin/$tool"
+  done
+  escalate_add "$state" "blocked: hash-free delivery"
+  afk_enter "$state"
+  (
+    PATH="$toolbin"
+    command -v md5 >/dev/null 2>&1 && fail "md5 is still reachable, so this case does not model a host without a hashing tool"
+    command -v md5sum >/dev/null 2>&1 && fail "md5sum is still reachable, so this case does not model a host without a hashing tool"
+    fm_backend_target_exists() { return 0; }
+    pane_is_busy() { return 0; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+    if FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="fakepane" \
+      escalate_flush "$state" max-defer; then
+      fail "an unprovable busy delivery reported success on a host with no hashing tool"
+    fi
+  ) || fail "hash-free escalate_flush subshell failed"
+  grep -F 'blocked: hash-free delivery' "$sent" >/dev/null \
+    || fail "nothing was typed into the busy pane on a host with no md5 or md5sum, so delivery silently stopped"
+  grep -F 'blocked: hash-free delivery' "$state/.subsuper-escalations" >/dev/null \
+    || fail "the escalation was dropped on a delivery nothing could prove"
+  pass "escalate_flush: a busy pane is still typed into on a host carrying neither md5 nor md5sum"
 }
 
 # The record is session-scoped delivery state. A confirmed flush must drop it, or
@@ -2408,7 +2534,10 @@ test_max_defer_busy_unverified_still_alarms_on_an_unreadable_composer
 test_inject_msg_caps_enters_only_where_a_queue_stays_visible
 test_busy_visible_queue_harness_is_typed_but_never_confirmed
 test_idle_visible_queue_harness_still_confirms_and_clears
-test_max_defer_alarms_without_retyping_an_unchanged_digest
+test_max_defer_alarms_without_retyping_already_typed_items
+test_unprovable_retypes_carry_only_the_new_items
+test_confirmed_flush_keeps_items_it_did_not_carry
+test_busy_delivery_needs_no_external_hash_tool
 test_confirmed_flush_clears_the_typed_digest_record
 test_busy_claude_recovers_a_swallowed_first_enter
 test_busy_claude_fully_swallowed_budget_is_never_confirmed
