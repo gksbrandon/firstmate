@@ -1143,7 +1143,7 @@ window_for_task() {  # <task-key> [state]
 #     would merge with the human's text.
 inject_msg() {  # <message> [state] [normal|max-defer]
   local msg=$1 state mode target backend retries sleep_s verdict composer encoded harness
-  local busy= unproven=
+  local busy='' unproven=''
   state="${2:-$(_state_root)}"
   mode="${3:-normal}"
   # (1) Presence-gate: inject ONLY when afk is active. When afk is off, the
