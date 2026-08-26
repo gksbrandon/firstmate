@@ -977,14 +977,18 @@ wedge_alarm_notify() {  # <summary> <marker>
   return 0
 }
 
-# Raise a loud, rate-limited alarm when escalations cannot be delivered after
-# max-defer (the supervisor pane is genuinely busy/wedged, or the submit's Enter
-# is swallowed). The daemon must NEVER silently wedge: this logs
+# Raise a loud, rate-limited alarm when delivery cannot be CONFIRMED after
+# max-defer: the supervisor pane is genuinely wedged, the submit's Enter is
+# swallowed, or the digest was typed into a busy pane nothing can prove queued
+# it. The daemon must NEVER silently wedge: this logs
 # an ERROR, drops a durable marker firstmate/recovery can surface, flashes
 # the tmux supervisor client's status line when applicable, and attempts a
 # configurable backend-independent active alert (wedge_alarm_notify). Nothing
 # is lost - the buffer and the
 # wake-queue both survive - but the stall stops being invisible.
+# The body therefore reports possibly-delivered items rather than a refusal,
+# while the first line keeps the `undelivered` shape bin/fm-afk-return.sh parses
+# into the durable return evidence.
 inject_wedge_alarm() {  # <state> <age-seconds>
   local state=$1 age=$2 marker target backend max_defer now notify=1
   marker="$state/.subsuper-inject-wedged"

@@ -2223,6 +2223,50 @@ test_partly_delivered_flush_is_not_reported_as_recovery() {
   pass "max-defer: recovery is reported and the wedge marker dropped only once nothing is left outstanding"
 }
 
+# state/.subsuper-inject-wedged is a captain-facing artifact: bin/fm-afk-return.sh
+# carries its first line into the return catch-up and the /afk skill tells
+# firstmate to surface it on the "while you were out" summary. On the two paths
+# added here the digest IS typed and submitted into a busy pane and may well be
+# queued; only the CONFIRMATION fails. A marker that reports a refusal there tells
+# the captain nothing arrived when something may have, which is the same
+# misleading silence the alarm exists to remove. The first line's shape is the
+# separate contract fm-afk-return.sh parses, so it must survive unchanged.
+test_wedge_marker_reports_unconfirmed_delivery_not_refusal() {
+  local dir state sent marker body
+  dir=$(make_supercase wedge-marker-wording)
+  state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
+  marker="$state/.subsuper-inject-wedged"
+  escalate_add "$state" "needs-decision: pick W"
+  echo $(( $(date +%s) - 600 )) > "$state/.subsuper-escalations.since"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    pane_is_busy() { return 0; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+    FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="fakepane" \
+      FM_ESCALATE_BATCH_SECS=99999 FM_MAX_DEFER_SECS=60 housekeeping "$state"
+  ) || fail "max-defer housekeeping window failed"
+
+  assert_grep 'needs-decision: pick W' "$sent" \
+    "the max-defer attempt never reached the pane, so this case no longer covers a possibly-delivered digest"
+  [ -s "$marker" ] || fail "the unprovable busy attempt raised no wedge marker"
+
+  head -1 "$marker" | grep -Eq '^fm away-mode inject WEDGED: [0-9]+s undelivered' \
+    || fail "the marker's first line lost the shape bin/fm-afk-return.sh parses: $(head -1 "$marker")"
+
+  body=$(tail -n +2 "$marker")
+  assert_not_contains "$body" 'could not accept' \
+    "the marker tells the captain the pane refused a digest that was typed and submitted and may be queued"
+  assert_contains "$body" 'could not be confirmed' \
+    "the marker does not say what actually failed: the confirmation, not the delivery"
+  assert_contains "$body" 'possibly-delivered' \
+    "the marker does not tell the captain the buffered items may already have arrived"
+  assert_grep 'needs-decision: pick W' "$marker" \
+    "the marker dropped the buffered items it is supposed to surface"
+  pass "the wedge marker reports an unconfirmed delivery, not a refusal, and keeps the first line fm-afk-return.sh parses"
+}
+
 # Delivery must not depend on an external hashing tool. _hash_text falls back to
 # md5sum and produces an EMPTY signature when neither md5 nor md5sum is on PATH,
 # and an empty signature compared against an absent marker matched on the very
@@ -2597,6 +2641,7 @@ test_max_defer_alarms_without_retyping_already_typed_items
 test_unprovable_retypes_carry_only_the_new_items
 test_confirmed_flush_keeps_items_it_did_not_carry
 test_partly_delivered_flush_is_not_reported_as_recovery
+test_wedge_marker_reports_unconfirmed_delivery_not_refusal
 test_busy_delivery_needs_no_external_hash_tool
 test_confirmed_flush_clears_the_typed_digest_record
 test_busy_claude_recovers_a_swallowed_first_enter

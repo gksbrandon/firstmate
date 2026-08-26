@@ -133,6 +133,8 @@ If that submit cannot be confirmed, it raises a loud, rate-limited wedge alarm:
 an ERROR in the daemon log, a durable
 `state/.subsuper-inject-wedged` marker (surface it on the "while you were out"
 catch-up if present), a tmux status-line flash when applicable, and a configurable backend-independent active alert.
+A wedge means delivery was never **confirmed**, not that the pane refused the digest: on the busy paths above it was typed and submitted and may already be queued, so surface its buffered items as possibly-delivered rather than certainly lost, which is what the marker's own body says.
+The marker's first line keeps the word `undelivered` because `bin/fm-afk-return.sh` parses that shape into the durable return evidence; read that line as unconfirmed too.
 `docs/wedge-alarm.md` owns the alert channel setup, and `docs/verification/supervision.md` "Wedge-alarm channels" owns active evidence.
 So a guard false-positive becomes a visible stall, never an unbounded silent no-op.
 
