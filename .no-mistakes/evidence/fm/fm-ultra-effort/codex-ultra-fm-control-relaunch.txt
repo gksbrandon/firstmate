@@ -1,0 +1,43 @@
+
+$ fm-control.sh rl7b relaunch --harness codex --model gpt-5.6-sol --effort ultra --note "use the ultra tier"
+  warning: /var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-control-relaunch.y6UM1X/codexultra-26882/home/data/rl7b/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+  relaunched rl7b harness=codex from=claude model=gpt-5.6-sol effort=ultra backend=tmux endpoint=fmses:fm-rl7b worktree=/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-control-relaunch.y6UM1X/codexultra-26882/wt
+
+----------------------------------------------------------------
+STEP: explicit --effort ultra reaches the codex replacement launch
+----------------------------------------------------------------
+  durable task metadata after relaunch:
+    harness=codex
+    model=gpt-5.6-sol
+    effort=ultra
+  relaunch journal (state/rl7b.control-relaunch):
+    from_harness=claude
+    from_effort=default
+    to_harness=codex
+    to_model=gpt-5.6-sol
+    to_effort=ultra
+  launch command sent to the replacement pane:
+    unset TRACEPARENT; env -u CURSOR_AGENT -u CURSOR_INVOKED_AS codex --model 'gpt-5.6-sol' -c 'model_reasoning_effort="ultra"' --dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch '/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-control-relaunch.y6UM1X/codexultra-26882/home/state/rl7b.turn-ended'\"]" "$('/Users/brandon.goh/.no-mistakes/worktrees/75ea69edc5f9/01M0YQXXQYGJJAZNSM97YCNZTQ/bin/fm-operational-input.sh' encode launch-brief < '/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-control-relaunch.y6UM1X/codexultra-26882/home/data/rl7b/brief.md')"
+
+$ cat config/secondmate-harness
+  codex gpt-5.6-sol ultra
+$ fm-control.sh sm3b relaunch
+  warning: secondmate sm3b sync skipped before launch: primary default-branch commit cannot be resolved
+  relaunched sm3b harness=codex from=claude model=gpt-5.6-sol effort=ultra backend=tmux endpoint=fmses:fm-sm3b worktree=/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-control-relaunch.y6UM1X/smultra-8201/smhome
+
+----------------------------------------------------------------
+STEP: a durable codex+ultra secondmate pin reaches the replacement launch
+----------------------------------------------------------------
+  durable task metadata after relaunch:
+    harness=codex
+    model=gpt-5.6-sol
+    effort=ultra
+  relaunch journal (state/sm3b.control-relaunch):
+    from_harness=claude
+    from_effort=default
+    to_harness=codex
+    to_model=gpt-5.6-sol
+    to_effort=ultra
+  launch command sent to the replacement pane:
+    unset TRACEPARENT; FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME='/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-control-relaunch.y6UM1X/smultra-8201/home' FM_HOME='/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-control-relaunch.y6UM1X/smultra-8201/smhome' FM_TRACE_CONTEXT=off FM_SUPERVISION_MODEL=persistent env -u CURSOR_AGENT -u CURSOR_INVOKED_AS codex --model 'gpt-5.6-sol' -c 'model_reasoning_effort="ultra"' --dangerously-bypass-approvals-and-sandbox "$('/Users/brandon.goh/.no-mistakes/worktrees/75ea69edc5f9/01M0YQXXQYGJJAZNSM97YCNZTQ/bin/fm-operational-input.sh' encode launch-brief < '/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-control-relaunch.y6UM1X/smultra-8201/home/data/sm3b/brief.md')"
+

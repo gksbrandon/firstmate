@@ -1,0 +1,62 @@
+
+----------------------------------------------------------------
+STEP 1: codex: a configured ultra profile crosses the SSH boundary and reaches the remote pane's launch command
+----------------------------------------------------------------
+  config/secondmate-harness on the captain-facing primary:
+    codex gpt-5.6-sol ultra
+  parent task metadata (state/ios.meta):
+    harness=codex
+    model=gpt-5.6-sol
+    effort=ultra
+  remote host task metadata:
+    harness=codex
+    model=gpt-5.6-sol
+    effort=ultra
+  launch command the remote pane received (herdr pane send-text):
+    pane send-text w1:p3 FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME='/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-root' FM_HOME='/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-home' FM_TRACE_CONTEXT=off FM_SUPERVISION_MODEL=persistent env -u CURSOR_AGENT -u CURSOR_INVOKED_AS codex --model 'gpt-5.6-sol' -c 'model_reasoning_effort="ultra"' --dangerously-bypass-approvals-and-sandbox "$('/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-root/bin/fm-operational-input.sh' encode launch-brief < '/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-home/data/charter.md')" --session fm-remote
+ok - codex: a configured ultra profile crosses the SSH boundary and reaches the remote pane's launch command
+
+----------------------------------------------------------------
+STEP 2: pi: the shared max level still reaches the remote pi launch command
+----------------------------------------------------------------
+  config/secondmate-harness on the captain-facing primary:
+    pi anthropic/claude-opus-5 max
+  parent task metadata (state/ios.meta):
+    harness=pi
+    model=anthropic/claude-opus-5
+    effort=max
+  remote host task metadata:
+    harness=pi
+    model=anthropic/claude-opus-5
+    effort=max
+  launch command the remote pane received (herdr pane send-text):
+    pane send-text w1:p3 FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME='/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-root' FM_HOME='/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-home' FM_TRACE_CONTEXT=off FM_SUPERVISION_MODEL=persistent env -u CURSOR_AGENT -u CURSOR_INVOKED_AS FM_PI_HARNESS=pi '/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-root/bin/pi' --tui-mode regular --model 'anthropic/claude-opus-5' --thinking 'max' -e '/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-home/.pi/extensions/fm-primary-turnend-guard.ts' -e '/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-home/.pi/extensions/fm-primary-pi-watch.ts' "$('/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-root/bin/fm-operational-input.sh' encode launch-brief < '/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-home/data/charter.md')" --session fm-remote
+ok - pi: the shared max level still reaches the remote pi launch command
+
+----------------------------------------------------------------
+STEP 3: pi: a Codex-only ultra profile is recorded on both hosts and omitted from the remote launch
+----------------------------------------------------------------
+  config/secondmate-harness on the captain-facing primary:
+    pi anthropic/claude-opus-5 ultra
+  parent task metadata (state/ios.meta):
+    harness=pi
+    model=anthropic/claude-opus-5
+    effort=ultra
+  remote host task metadata:
+    harness=pi
+    model=anthropic/claude-opus-5
+    effort=ultra
+  launch command the remote pane received (herdr pane send-text):
+    pane send-text w1:p3 FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME='/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-root' FM_HOME='/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-home' FM_TRACE_CONTEXT=off FM_SUPERVISION_MODEL=persistent env -u CURSOR_AGENT -u CURSOR_INVOKED_AS FM_PI_HARNESS=pi '/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-root/bin/pi' --tui-mode regular --model 'anthropic/claude-opus-5' -e '/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-home/.pi/extensions/fm-primary-turnend-guard.ts' -e '/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-home/.pi/extensions/fm-primary-pi-watch.ts' "$('/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-root/bin/fm-operational-input.sh' encode launch-brief < '/private/var/folders/vl/yjdqg3215dlc52hcs8wv2ldw0000gp/T/fm-remote-profile-axes.sogthO/remote-home/data/charter.md')" --session fm-remote
+ok - pi: a Codex-only ultra profile is recorded on both hosts and omitted from the remote launch
+
+----------------------------------------------------------------
+STEP 4: an unverified configured effort is refused before any remote launch
+----------------------------------------------------------------
+  config/secondmate-harness on the captain-facing primary:
+    codex gpt-5.6-sol supreme
+  fm-spawn.sh ios --secondmate said:
+    error: invalid configured remote secondmate effort: supreme
+  launch commands the remote backend received:
+ok - an unverified configured effort is refused by the parent before any remote launch
+ALL TESTS PASSED
