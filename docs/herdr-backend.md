@@ -258,7 +258,7 @@ An unlisted harness waits for an idle window rather than borrowing that proof, a
 That attempt never clears the escalation buffer and always raises the wedge alarm, because an empty composer on an unmeasured harness is not proof the line was queued rather than discarded.
 The same holds for a listed harness that keeps its queued line visible in the composer: `pending` reads identically whether the Enter queued or was swallowed, so that delivery is attempted but never confirmed either.
 Any such unprovable attempt is typed at most once per distinct digest, so a long turn keeps alarming without retyping the same escalation into the pane.
-`bin/fm-test-run.sh` runs the opt-in live guard that refreshes this claim.
+[`verification/runtime-backends.md`](verification/runtime-backends.md#busy-pane-injection) owns the dated measurement and the opt-in live command that refreshes it.
 
 The current operational envelope starts with U+2063 and `FIRSTMATE_OP: `.
 The separate routed-request carrier uses `[fm-from-firstmate]` plus U+2063.
