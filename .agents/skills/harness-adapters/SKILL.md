@@ -120,13 +120,15 @@ Use `low` for well-understood work with an explicit bounded path and `xhigh` for
 Choose intermediate levels proportionally as complexity, uncertainty, blast radius, or open-ended reasoning increases.
 When a verified adapter lacks `xhigh`, cap the choice at its highest supported non-`max` level rather than omitting the intended effort silently.
 Never select `max` from this fallback; use it only when the captain has explicitly expressed that per-task or standing preference.
+Never select Codex-only `ultra` from this fallback.
+Before selecting `ultra`, explain that it uses internal sub-agent decomposition with significantly higher token spend per turn and obtain the captain's current explicit approval.
 
 The supported launch-profile flags below are verified locally; each row records its evidence.
 
 | Harness | Model flag | Effort flag | Notes |
 |---|---|---|---|
 | claude | `--model <model>` | `--effort <low\|medium\|high\|xhigh\|max>` | Verified on Claude Code 2.1.196. |
-| codex | `--model <model>` | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh>"'` | Verified on codex-cli 0.142.1. The installed binary schema contains `model_reasoning_effort`, the active config uses it, and the bundled model catalog advertises only low/medium/high/xhigh. `max` is omitted. |
+| codex | `--model <model>` | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh\|ultra>"'` | Verified from codex-cli 0.149.1's embedded schema for low/medium/high/xhigh/ultra, with ultra exclusive to gpt-5.6-sol and unsupported by the currently nix-pinned PATH codex 0.133.0 until its separate cutover; `max` is omitted. |
 | grok | `--model <model>` | `--reasoning-effort <low\|medium\|high>` | Verified on grok 0.2.99 (2026-07-13). `--effort` is an alias, but firstmate's profile axis is reasoning effort. As of 0.2.99 the ceiling is `high`; both `xhigh` and `max` are rejected with `use one of: high, medium, low`, so firstmate omits them. |
 | pi / pi-signed | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-07-27 on Pi and pi-signed 0.82.0. Both expose the same accepted thinking levels and completed the same model-qualified max-thinking smoke. |
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |

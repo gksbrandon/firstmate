@@ -144,7 +144,7 @@ cmd_launch() {
     claude|codex|opencode|pi|pi-signed|grok|kimi|cursor) ;;
     *) die "unverified remote secondmate harness: $harness" ;;
   esac
-  case "$effort" in -|low|medium|high|xhigh|max) ;; *) die "invalid remote secondmate effort: $effort" ;; esac
+  case "$effort" in -|low|medium|high|xhigh|max|ultra) ;; *) die "invalid remote secondmate effort: $effort" ;; esac
   # Herdr is required on this host, not merely preferred: its server belongs to
   # the GUI login session, so the endpoint survives every SSH disconnection that
   # a remote route depends on. bin/fm-remote-doctor.sh is the readiness owner.

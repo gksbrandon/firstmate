@@ -530,6 +530,22 @@ test_explicit_model_wins_over_the_recorded_one() {
   pass "fm-control relaunch: explicit model and effort win over the recorded ones"
 }
 
+test_codex_ultra_effort_passes_through_relaunch() {
+  local dir out rc launch
+  dir=$(new_case codexultra rl7b)
+  add_ship_task "$dir" rl7b claude
+  printf 'codex' > "$dir/fake/becomes"
+  out=$(run_control "$dir" rl7b relaunch --harness codex --model gpt-5.6-sol --effort ultra --note "use the ultra tier"); rc=$?
+  expect_code 0 "$rc" "relaunch with codex ultra effort should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" rl7b model)" = gpt-5.6-sol ] || fail "the codex ultra model should be recorded"
+  [ "$(meta_field "$dir" rl7b effort)" = ultra ] || fail "the ultra effort should be recorded"
+  [ "$(journal_field "$dir" rl7b to_effort)" = ultra ] || fail "the relaunch journal should retain ultra"
+  launch=$(cat "$dir/fake/literal")
+  assert_contains "$launch" "-c 'model_reasoning_effort=\"ultra\"'" \
+    "fm-control did not pass ultra through to the codex launch"
+  pass "fm-control relaunch: codex ultra effort reaches the replacement launch"
+}
+
 test_relaunch_onto_an_unverified_harness_is_refused() {
   local dir out rc
   dir=$(new_case badharness rl8)
@@ -1324,6 +1340,7 @@ test_harness_switch_resolves_a_prefixed_recorded_harness
 test_prefixed_recorded_harness_requires_explicit_replacement
 test_same_harness_relaunch_keeps_the_profile_axes
 test_explicit_model_wins_over_the_recorded_one
+test_codex_ultra_effort_passes_through_relaunch
 test_relaunch_onto_an_unverified_harness_is_refused
 test_prior_harness_turnend_registry_entry_is_cleared
 test_wiring_removal_failure_refuses_before_replacement_arm

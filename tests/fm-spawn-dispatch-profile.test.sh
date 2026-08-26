@@ -435,6 +435,23 @@ test_claude_threads_model_and_effort() {
   pass "claude receives --model and --effort profile flags"
 }
 
+test_claude_omits_codex_only_ultra_effort() {
+  local rec id out status launch
+  id=profile-claude-ultra-z2b
+  rec=$(make_spawn_case profile-claude-ultra claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model sonnet --effort ultra)
+  status=$?
+  expect_code 0 "$status" "claude spawn with codex-only ultra effort should omit the effort flag"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" claude sonnet ultra
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "claude --dangerously-skip-permissions --model 'sonnet'" \
+    "claude launch did not preserve the model flag when ultra effort was omitted"
+  assert_not_contains "$launch" "--effort" "claude launch must omit codex-only ultra effort"
+  pass "non-codex launches retain ultra in metadata and omit its unsupported flag"
+}
+
 test_codex_threads_model_and_effort() {
   local rec id out status launch
   id=profile-codex-z3
@@ -449,6 +466,23 @@ test_codex_threads_model_and_effort() {
   assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox" \
     "codex launch did not thread model and reasoning effort config"
   pass "codex receives --model and model_reasoning_effort profile flags"
+}
+
+test_codex_threads_ultra_effort() {
+  local rec id out status launch
+  id=profile-codex-ultra-z3b
+  rec=$(make_spawn_case profile-codex-ultra codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+    --model gpt-5.6-sol --effort ultra)
+  status=$?
+  expect_code 0 "$status" "codex spawn with ultra effort should pass validation"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5.6-sol ultra
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "codex --model 'gpt-5.6-sol' -c 'model_reasoning_effort=\"ultra\"' --dangerously-bypass-approvals-and-sandbox" \
+    "codex launch did not thread ultra through model_reasoning_effort"
+  pass "codex receives the ultra model_reasoning_effort value"
 }
 
 test_codex_omits_invalid_max_effort() {
@@ -838,7 +872,9 @@ test_active_dispatch_profile_allows_explicit_harness
 test_active_dispatch_profile_allows_positional_harness
 test_active_dispatch_profile_allows_raw_launch_command
 test_claude_threads_model_and_effort
+test_claude_omits_codex_only_ultra_effort
 test_codex_threads_model_and_effort
+test_codex_threads_ultra_effort
 test_codex_omits_invalid_max_effort
 test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
