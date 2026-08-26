@@ -1421,10 +1421,13 @@ effort_flag_for_harness() {
     muse)
       # muse 0.1.0-R708.1 --reasoning-effort accepts none|minimal|low|medium|
       # high|xhigh|ultra and defaults to high, so low..xhigh map straight across.
-      # ultra is muse's max-CLASS level, so firstmate's max maps onto it - but
-      # only ever as an EXPLICIT captain choice, never as a fallback, because
-      # AGENTS.md section 4 forbids selecting max without captain preference and
-      # the omitted effort here leaves muse on its own high default. muse's extra
+      # muse's native ultra is muse's own max-CLASS level and is unrelated to the
+      # Codex-only ultra profile value emitted above. firstmate's max maps onto
+      # muse's level, but only ever as an EXPLICIT captain choice, never as a
+      # fallback, because AGENTS.md section 4 forbids selecting max without
+      # captain preference and the omitted effort here leaves muse on its own
+      # high default. The Codex-only ultra is therefore deliberately absent from
+      # the case below and falls through to that same high default. muse's extra
       # none/minimal levels sit below firstmate's shared vocabulary and are
       # deliberately unreachable rather than remapped onto low.
       case "$effort" in

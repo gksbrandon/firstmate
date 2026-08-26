@@ -36,6 +36,7 @@ REMOTE_HOME="$TMP_ROOT/remote-home"
 FAKEBIN=$(fm_fakebin "$TMP_ROOT/fake")
 HERDR_LOG="$TMP_ROOT/remote-herdr.log"
 HERDR_STATE="$TMP_ROOT/remote-herdr.state"
+PI_LOG="$TMP_ROOT/remote-pi.log"
 TMUX_LOG="$TMP_ROOT/remote-tmux.log"
 TMUX_STATE="$TMP_ROOT/remote-tmux.state"
 CLAIMS="$TMP_ROOT/claims"
@@ -97,6 +98,23 @@ esac
 exit 0
 SH
 chmod +x "$REMOTE_ROOT/bin/tmux"
+
+# bin/fm-remote-job-lib.sh rebuilds the child PATH from scratch and leads it with
+# the remote root's own bin, so this stub shadows any host pi and the suite never
+# touches a real Pi install. bin/fm-spawn.sh resolves the harness name on that
+# PATH and probes the resolved executable with `--help` before composing
+# --tui-mode, so the stub answers exactly that probe and logs every call, which
+# is how the pi cases below prove the launch resolved here.
+cat > "$REMOTE_ROOT/bin/pi" <<SH
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "\$*" >> '$PI_LOG'
+if [ "\${1:-}" = --help ]; then
+  printf '%s\n' 'Pi 0.84.0' 'Options: --help --tui-mode <mode>'
+fi
+exit 0
+SH
+chmod +x "$REMOTE_ROOT/bin/pi"
 install_remote_herdr_fixture "$REMOTE_ROOT" "$HERDR_STATE" "$HERDR_LOG" \
   "$TMP_ROOT/herdr-send-fail" "$TMP_ROOT/herdr.sock"
 git -C "$REMOTE_ROOT" init -q -b main
@@ -187,6 +205,10 @@ pass "codex: a configured ultra profile crosses the SSH boundary and reaches the
 # so the omission asserted next is specific to ultra rather than a dead flag.
 relaunch_with_profile 'pi anthropic/claude-opus-5 max' \
   "the remote route refused a configured pi+max profile"
+assert_present "$PI_LOG" \
+  "the remote pi launch never probed the stub, so it resolved a host pi instead"
+assert_grep '--help' "$PI_LOG" \
+  "the remote pi launch did not run the stub's help probe"
 [ "$(meta_axis "$PARENT/state/ios.meta" effort)" = max ] \
   || fail "parent metadata did not record the configured remote max effort"
 assert_grep "--thinking 'max'" "$HERDR_LOG" \
