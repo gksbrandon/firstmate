@@ -2267,12 +2267,13 @@ test_wedge_marker_reports_unconfirmed_delivery_not_refusal() {
   pass "the wedge marker reports an unconfirmed delivery, not a refusal, and keeps the first line fm-afk-return.sh parses"
 }
 
-# Delivery must not depend on an external hashing tool. _hash_text falls back to
-# md5sum and produces an EMPTY signature when neither md5 nor md5sum is on PATH,
-# and an empty signature compared against an absent marker matched on the very
-# first attempt: the digest was never typed, the marker never written, and every
-# later window repeated the same early return while the log claimed the digest
-# had already been typed. That is a silent return to never delivering into a busy
+# Delivery must not depend on an external hashing tool. The daemon no longer
+# hashes; this case guards against reintroducing one. An earlier digest-hash
+# bound produced an EMPTY signature when neither md5 nor md5sum was on PATH, and
+# an empty signature compared against an absent marker matched on the very first
+# attempt: the digest was never typed, the marker never written, and every later
+# window repeated the same early return while the log claimed the digest had
+# already been typed. That is a silent return to never delivering into a busy
 # pane, which is exactly what away-mode delivery exists to remove.
 test_busy_delivery_needs_no_external_hash_tool() {
   local dir state sent toolbin tool src

@@ -782,6 +782,7 @@ FM_PENDING_REPLY_GRACE_SECS=120   # seconds after marked-request delivery before
 # sub-supervisor (bin/fm-supervise-daemon.sh); presence-gated via /afk
 FM_SUPERVISOR_BACKEND=             # optional supervisor pane backend override; tmux/herdr only, otherwise detects $TMUX_PANE then HERDR_ENV/HERDR_PANE_ID before tmux fallback
 FM_SUPERVISOR_TARGET=              # optional supervisor pane target override; tmux target or herdr <session>:<pane-id>, otherwise auto-detected
+FM_DAEMON_PRIMARY_HARNESS=         # the captain's primary harness the daemon supervises; bin/fm-afk-launch.sh resolves and passes it because the daemon's own terminal is a plain shell, otherwise detected from process ancestry; selects the rendered busy signature and the busy-guard contract (.agents/skills/afk/SKILL.md)
 FM_INJECT_SKIP=heartbeat           # |-prefixes force-self-handled bypassing classification; empty disables
 FM_ESCALATE_BATCH_SECS=90          # buffer window for batched escalation digests; 0 = flush immediately
 FM_MAX_DEFER_SECS=300              # max buffered escalation age before retry plus wedge alarm; 0 disables
