@@ -320,7 +320,9 @@ For OpenCode `pending` is what a successfully queued line looks like, so each re
 Claude keeps its full budget, and must: it clears its composer on a landed Enter, so `pending` means the Enter was swallowed and the digest is sitting unsent, and the retries are what recover it.
 Claude spends the budget precisely when an Enter was swallowed, which is the case the budget exists for; capping it would convert a single swallow into a false confirmation that cleared the buffer with the text still in the composer.
 An extra Enter on an already-cleared Claude composer is a documented no-op rather than a duplicate delivery, so the full budget carries no duplicate risk.
-The cap is scoped to `inject_msg`; `INJECT_CONFIRM_RETRIES_DEFAULT` and the shared submit cores' retry contract are unchanged.
+The same asymmetry decides what counts as confirmation: the submit cores' retries-exhausted conversion is harness-agnostic and reads busy plus a proven `pending` as a queued line, so on a composer-clearing harness a fully swallowed Enter budget would otherwise report delivery with the digest still unsent.
+Away-mode injection therefore re-reads the composer after the submit on a busy pane whose harness is absent from the visible-queue set, and only an affirmatively cleared composer is delivery; anything else preserves the buffer and leaves the wedge alarm reachable.
+Both are scoped to `inject_msg`; `INJECT_CONFIRM_RETRIES_DEFAULT`, `fm_composer_queued_enter_verdict`, and the shared submit cores' retry contract are unchanged.
 An unlisted harness is not assumed to queue and waits for an idle window instead, but that wait is bounded: `bin/fm-supervise-daemon.sh`'s max-defer escape types the digest anyway once the buffer passes `FM_MAX_DEFER_SECS`, under the same composer guard and verified submit.
 That attempt is never treated as confirmation, since an empty composer on an unmeasured harness cannot distinguish a queued line from a discarded one, so the buffer survives and the wedge alarm fires regardless of the verdict.
 No primary is therefore silently starved, and none is silently dropped.

@@ -1123,9 +1123,10 @@ window_for_task() {  # <task-key> [state]
 # gone, afk is inactive, the supervisor is busy on a harness not verified to
 # queue input (in `normal` mode it defers; in `max-defer` mode it types the digest
 # anyway but still returns non-zero, because that delivery cannot be proven), the
-# composer is not affirmatively empty, or the verified submit cannot be confirmed
-# after bounded retries. On non-zero the caller preserves the buffer so the
-# escalation survives for the next cycle or the catch-up flush.
+# composer is not affirmatively empty, the verified submit cannot be confirmed
+# after bounded retries, or a busy pane whose harness clears its composer on a
+# landed Enter still shows the digest afterwards. On non-zero the caller preserves
+# the buffer so the escalation survives for the next cycle or the catch-up flush.
 #
 # Submit model:
 #   - TYPE ONCE, then submit with Enter. Never retype the digest: a swallowed
@@ -1255,8 +1256,24 @@ inject_msg() {  # <message> [state] [normal|max-defer]
   # housekeeping, so a stall stays visible and an escalation is never dropped on
   # an unproven `empty`.
   if [ -n "$unproven" ]; then
-    log "inject unproven: typed one digest into a busy $harness pane past max-defer (verdict=$verdict); an empty composer is not proof an unverified harness queued the line rather than discarding it, so the buffer stays and the wedge alarm fires"
+    log "inject unproven: typed the digest once and spent up to $retries Enter(s) on a busy $harness pane past max-defer (verdict=$verdict); an empty composer is not proof an unverified harness queued the line rather than discarding it, so the buffer stays and the wedge alarm fires"
     return 1
+  fi
+  # (6) Confirm against the COMPOSER on a busy pane whose harness clears it on a
+  # landed Enter. The submit cores' retries-exhausted conversion
+  # (fm_composer_queued_enter_verdict) is deliberately harness-agnostic: it reads
+  # a proven-pending composer on a busy pane as a queued line. That is right for a
+  # harness that keeps a queued line visible, and wrong for one that clears it,
+  # where the same picture is a SWALLOWED Enter with the digest sitting unsent.
+  # Only this caller knows which, so the check lives here rather than in the
+  # shared cores. An affirmatively cleared composer is the delivery; anything
+  # else keeps the buffer and leaves the wedge alarm reachable.
+  if [ "$verdict" = empty ] && [ -n "$busy" ] && ! fm_composer_busy_queue_keeps_text "$harness"; then
+    composer=$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)
+    if [ "$composer" != empty ]; then
+      log "inject failed: busy $harness pane reported a submit but its composer reads ${composer:-unknown}, not the cleared composer a landed Enter leaves; treating the digest as still unsent and preserving the buffer"
+      return 1
+    fi
   fi
   if [ "$verdict" = empty ]; then
     return 0  # Backend confirmed the submit.

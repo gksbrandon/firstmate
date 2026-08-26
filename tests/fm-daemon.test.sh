@@ -1952,22 +1952,51 @@ test_inject_msg_caps_enters_only_where_a_queue_stays_visible() {
   pass "inject_msg: one Enter for a busy visible-queue harness, full budget for busy claude and every idle pane"
 }
 
-# The loss the cap would have caused, driven end to end through escalate_flush.
-# The stub below models claude's measured busy-pane contract rather than a fixed
-# answer: the digest is typed once, each Enter either lands (claude CLEARS its
-# composer) or is swallowed (the digest stays visible), and a composer still
+# A busy pane on a harness that CLEARS its composer on a landed Enter, driven end
+# to end through escalate_flush. The stub models that measured contract rather
+# than a fixed answer: the digest is typed once, each Enter either lands (the
+# composer clears) or is swallowed (the digest stays visible), a composer still
 # holding text when the budget runs out is a proven `pending` handed to the real
-# shared policy, fm_composer_queued_enter_verdict.
+# shared policy fm_composer_queued_enter_verdict, and the composer read reports
+# what the modelled pane actually shows.
 #
-# With one Enter the swallow converts to a false `empty` and escalate_flush
-# truncates the buffer while the digest is still sitting in the composer, which
-# is the silent loss. With the budget intact the retry lands, the composer
-# clears, and the confirmation is real. The composer assertion is what separates
-# the two: only a genuinely landed Enter empties it.
+# That shared conversion is deliberately harness-agnostic and reads busy+pending
+# as a queued line, which is right for opencode and wrong here: for claude the
+# same picture is a SWALLOWED Enter. Delivery therefore has to be confirmed
+# against the composer itself, or a fully swallowed budget clears the buffer with
+# the digest unsent and no alarm.
 #
-# The stub's paths are passed through the environment rather than read from an
-# enclosing variable: inject_msg declares `local composer`, and bash's dynamic
-# scoping would otherwise resolve the stub's `$composer` to the daemon's verdict.
+# The stub's paths travel through the environment rather than an enclosing
+# variable: inject_msg declares `local composer`, and bash's dynamic scoping would
+# otherwise resolve the stub's `$composer` to the daemon's own verdict.
+_install_clearing_harness_pane() {  # <dir>
+  export FM_FAKE_PANE_TEXT="$1/pane-text" FM_FAKE_ENTERS="$1/enters" FM_FAKE_SWALLOW="$1/.swallow"
+  fm_backend_target_exists() { return 0; }
+  pane_is_busy() { return 0; }
+  fm_backend_composer_state() {
+    if [ -s "$FM_FAKE_PANE_TEXT" ]; then printf 'pending'; else printf 'empty'; fi
+  }
+  fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> ...
+    local budget=$4 n=0
+    printf '%s' "$3" > "$FM_FAKE_PANE_TEXT"
+    while [ "$n" -lt "$budget" ]; do
+      n=$((n + 1))
+      if [ -f "$FM_FAKE_SWALLOW" ]; then
+        [ "${FM_FAKE_PERSIST_SWALLOW:-0}" = 1 ] || rm -f "$FM_FAKE_SWALLOW"
+        continue
+      fi
+      : > "$FM_FAKE_PANE_TEXT"
+      break
+    done
+    printf '%s\n' "$n" > "$FM_FAKE_ENTERS"
+    if [ -s "$FM_FAKE_PANE_TEXT" ]; then
+      fm_composer_queued_enter_verdict pending busy
+    else
+      printf 'empty'
+    fi
+  }
+}
+
 test_busy_claude_recovers_a_swallowed_first_enter() {
   local dir state status=0
   dir=$(make_supercase busy-claude-swallow)
@@ -1976,26 +2005,7 @@ test_busy_claude_recovers_a_swallowed_first_enter() {
   escalate_add "$state" "needs-decision: pick C"
   afk_enter "$state"
   (
-    export FM_FAKE_PANE_TEXT="$dir/pane-text" FM_FAKE_ENTERS="$dir/enters" FM_FAKE_SWALLOW="$dir/.swallow"
-    fm_backend_target_exists() { return 0; }
-    pane_is_busy() { return 0; }
-    fm_backend_composer_state() { printf 'empty'; }
-    fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> ...
-      local budget=$4 n=0
-      printf '%s' "$3" > "$FM_FAKE_PANE_TEXT"
-      while [ "$n" -lt "$budget" ]; do
-        n=$((n + 1))
-        if [ -f "$FM_FAKE_SWALLOW" ]; then rm -f "$FM_FAKE_SWALLOW"; continue; fi
-        : > "$FM_FAKE_PANE_TEXT"
-        break
-      done
-      printf '%s\n' "$n" > "$FM_FAKE_ENTERS"
-      if [ -s "$FM_FAKE_PANE_TEXT" ]; then
-        fm_composer_queued_enter_verdict pending busy
-      else
-        printf 'empty'
-      fi
-    }
+    _install_clearing_harness_pane "$dir"
     FM_DAEMON_PRIMARY_HARNESS=claude FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
       escalate_flush "$state"
   ) || status=$?
@@ -2006,6 +2016,30 @@ test_busy_claude_recovers_a_swallowed_first_enter() {
   [ "$(cat "$dir/enters")" -eq 2 ] \
     || fail "expected the swallowed Enter plus one landing retry, got $(cat "$dir/enters") Enter(s)"
   pass "inject_msg: a swallowed first Enter into a busy claude pane is recovered by the retry, never confirmed by the swallow"
+}
+
+# Every Enter swallowed. The shared conversion still reports `empty`, so the
+# daemon's own composer check is the only thing standing between the captain and
+# a lost escalation.
+test_busy_claude_fully_swallowed_budget_is_never_confirmed() {
+  local dir state status=0
+  dir=$(make_supercase busy-claude-swallow-all)
+  state="$dir/state"
+  touch "$dir/.swallow"
+  escalate_add "$state" "needs-decision: pick D"
+  afk_enter "$state"
+  (
+    _install_clearing_harness_pane "$dir"
+    FM_FAKE_PERSIST_SWALLOW=1 FM_DAEMON_PRIMARY_HARNESS=claude \
+      FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      escalate_flush "$state"
+  ) || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a busy claude pane that swallowed every Enter reported delivery, so the buffer was cleared with the digest unsent"
+  grep -F 'pick D' "$state/.subsuper-escalations" >/dev/null \
+    || fail "the escalation was dropped even though every Enter was swallowed and the digest is still in the composer"
+  [ -s "$dir/pane-text" ] || fail "the fake pane cleared its composer, so this case never exercised a swallow"
+  pass "inject_msg: a fully swallowed Enter budget on a busy claude pane is unconfirmed and the escalation survives"
 }
 
 # The escape ends the wait; it never lowers the composer bar. A busy pane whose
@@ -2228,6 +2262,7 @@ test_max_defer_attempts_but_never_confirms_a_busy_unverified_harness
 test_max_defer_busy_unverified_still_alarms_on_an_unreadable_composer
 test_inject_msg_caps_enters_only_where_a_queue_stays_visible
 test_busy_claude_recovers_a_swallowed_first_enter
+test_busy_claude_fully_swallowed_budget_is_never_confirmed
 test_inject_msg_herdr_composer_guard_defers
 test_inject_msg_herdr_pane_gone_defers
 test_inject_msg_herdr_submits_through_backend_dispatch
