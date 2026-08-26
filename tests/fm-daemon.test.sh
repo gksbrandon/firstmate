@@ -1917,12 +1917,12 @@ test_max_defer_attempts_but_never_confirms_a_busy_unverified_harness() {
   pass "max-defer: a busy unverified harness is attempted, never confirmed; buffer survives an 'empty' verdict and the alarm fires"
 }
 
-# One Enter into a busy pane, whatever the budget. A busy pane is where Enter
-# QUEUES rather than submitting-and-clearing, so a second Enter is a second
-# queued turn: opencode keeps its text visible while queued, reads pending on
-# every pass, and would otherwise spend the whole retry budget and hand the
-# captain the same digest once per retry.
-test_inject_msg_sends_one_enter_into_a_busy_pane() {
+# Whether a queued line stays VISIBLE decides what a post-Enter `pending` means,
+# and therefore who may be capped to one Enter. opencode keeps its text visible,
+# so pending IS the queue and a retry would queue a second copy. claude clears
+# its composer, so pending is a SWALLOW and the retries are the only recovery;
+# capping claude would convert one swallow into a false confirmation.
+test_inject_msg_caps_enters_only_where_a_queue_stays_visible() {
   local dir state seen
   dir=$(make_supercase inject-busy-one-enter)
   state="$dir/state"; seen="$dir/retries.log"; : > "$seen"
@@ -1933,18 +1933,79 @@ test_inject_msg_sends_one_enter_into_a_busy_pane() {
     fm_backend_send_text_submit() { printf '%s\n' "$4" >> "$seen"; printf 'empty'; }
     pane_is_busy() { return 0; }
     FM_DAEMON_PRIMARY_HARNESS=opencode FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
-      FM_INJECT_CONFIRM_RETRIES=3 inject_msg "busy digest" "$state" \
+      FM_INJECT_CONFIRM_RETRIES=3 inject_msg "busy opencode digest" "$state" \
       || fail "inject_msg should deliver into a busy opencode pane whose composer is affirmatively empty"
+    FM_DAEMON_PRIMARY_HARNESS=claude FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      FM_INJECT_CONFIRM_RETRIES=3 inject_msg "busy claude digest" "$state" \
+      || fail "inject_msg should deliver into a busy claude pane whose composer is affirmatively empty"
     pane_is_busy() { return 1; }
     FM_DAEMON_PRIMARY_HARNESS=opencode FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
       FM_INJECT_CONFIRM_RETRIES=3 inject_msg "idle digest" "$state" \
       || fail "inject_msg should deliver into an idle opencode pane"
-  ) || fail "one-Enter busy cap inject_msg subshell failed"
-  [ "$(head -1 "$seen")" = 1 ] \
-    || fail "a busy-pane injection was given a retry budget of $(head -1 "$seen"), so the digest could be Enter'd more than once into a harness that queues each Enter"
+  ) || fail "busy-pane retry-budget inject_msg subshell failed"
+  [ "$(sed -n 1p "$seen")" = 1 ] \
+    || fail "a busy opencode injection was given a retry budget of $(sed -n 1p "$seen"), so the digest could be Enter'd more than once into a composer that keeps a queued line visible"
   [ "$(sed -n 2p "$seen")" = 3 ] \
-    || fail "the idle path's configured retry budget was changed to $(sed -n 2p "$seen"); the cap must be scoped to a busy pane"
-  pass "inject_msg: exactly one Enter into a busy pane, while the idle path keeps its configured retry budget"
+    || fail "a busy claude injection was capped to $(sed -n 2p "$seen") Enter(s); claude clears its composer, so a swallowed Enter has no recovery without its full budget"
+  [ "$(sed -n 3p "$seen")" = 3 ] \
+    || fail "the idle path's configured retry budget was changed to $(sed -n 3p "$seen"); the cap must be scoped to a busy pane on a visible-queue harness"
+  pass "inject_msg: one Enter for a busy visible-queue harness, full budget for busy claude and every idle pane"
+}
+
+# The loss the cap would have caused, driven end to end through escalate_flush.
+# The stub below models claude's measured busy-pane contract rather than a fixed
+# answer: the digest is typed once, each Enter either lands (claude CLEARS its
+# composer) or is swallowed (the digest stays visible), and a composer still
+# holding text when the budget runs out is a proven `pending` handed to the real
+# shared policy, fm_composer_queued_enter_verdict.
+#
+# With one Enter the swallow converts to a false `empty` and escalate_flush
+# truncates the buffer while the digest is still sitting in the composer, which
+# is the silent loss. With the budget intact the retry lands, the composer
+# clears, and the confirmation is real. The composer assertion is what separates
+# the two: only a genuinely landed Enter empties it.
+#
+# The stub's paths are passed through the environment rather than read from an
+# enclosing variable: inject_msg declares `local composer`, and bash's dynamic
+# scoping would otherwise resolve the stub's `$composer` to the daemon's verdict.
+test_busy_claude_recovers_a_swallowed_first_enter() {
+  local dir state status=0
+  dir=$(make_supercase busy-claude-swallow)
+  state="$dir/state"
+  touch "$dir/.swallow"
+  escalate_add "$state" "needs-decision: pick C"
+  afk_enter "$state"
+  (
+    export FM_FAKE_PANE_TEXT="$dir/pane-text" FM_FAKE_ENTERS="$dir/enters" FM_FAKE_SWALLOW="$dir/.swallow"
+    fm_backend_target_exists() { return 0; }
+    pane_is_busy() { return 0; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> ...
+      local budget=$4 n=0
+      printf '%s' "$3" > "$FM_FAKE_PANE_TEXT"
+      while [ "$n" -lt "$budget" ]; do
+        n=$((n + 1))
+        if [ -f "$FM_FAKE_SWALLOW" ]; then rm -f "$FM_FAKE_SWALLOW"; continue; fi
+        : > "$FM_FAKE_PANE_TEXT"
+        break
+      done
+      printf '%s\n' "$n" > "$FM_FAKE_ENTERS"
+      if [ -s "$FM_FAKE_PANE_TEXT" ]; then
+        fm_composer_queued_enter_verdict pending busy
+      else
+        printf 'empty'
+      fi
+    }
+    FM_DAEMON_PRIMARY_HARNESS=claude FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      escalate_flush "$state"
+  ) || status=$?
+  [ "$status" -eq 0 ] || fail "a busy claude injection whose retried Enter landed reported failure ($status)"
+  [ ! -s "$dir/pane-text" ] \
+    || fail "delivery was confirmed and the buffer cleared while the digest was still sitting unsent in claude's composer"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "buffer not cleared after a genuinely landed retry"
+  [ "$(cat "$dir/enters")" -eq 2 ] \
+    || fail "expected the swallowed Enter plus one landing retry, got $(cat "$dir/enters") Enter(s)"
+  pass "inject_msg: a swallowed first Enter into a busy claude pane is recovered by the retry, never confirmed by the swallow"
 }
 
 # The escape ends the wait; it never lowers the composer bar. A busy pane whose
@@ -2165,7 +2226,8 @@ test_inject_msg_busy_pane_delivers_for_a_queueing_harness
 test_inject_msg_busy_pane_still_honors_the_composer_guard
 test_max_defer_attempts_but_never_confirms_a_busy_unverified_harness
 test_max_defer_busy_unverified_still_alarms_on_an_unreadable_composer
-test_inject_msg_sends_one_enter_into_a_busy_pane
+test_inject_msg_caps_enters_only_where_a_queue_stays_visible
+test_busy_claude_recovers_a_swallowed_first_enter
 test_inject_msg_herdr_composer_guard_defers
 test_inject_msg_herdr_pane_gone_defers
 test_inject_msg_herdr_submits_through_backend_dispatch

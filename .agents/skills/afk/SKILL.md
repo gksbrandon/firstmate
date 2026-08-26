@@ -104,7 +104,8 @@ pane" below):
   **muse** is the exception to that list: it has no arm in `fm_busy_lines_match`, so it has **no registered busy signature on the rendered path** and never reads busy there at all, which means a muse primary on tmux is injected into on any tick with no bounded wait and no queueing proof.
   Registering a muse signature needs live verification against the real harness.
   The boundary matters most on the terminal-backed launcher path (`bin/fm-afk-launch.sh` passes the captain's harness in as `FM_DAEMON_PRIMARY_HARNESS`), where tmux has no native busy state and the rendered signature is the whole busy verdict.
-  Only one Enter is ever sent into a busy pane, whatever the configured retry budget, because each extra Enter into a harness that queues on Enter is a plausible duplicate escalation.
+  Only one Enter is sent into a busy pane whose harness keeps a queued line **visible** (`fm_composer_busy_queue_keeps_text`, opencode), because there a post-Enter `pending` is what a successful queue looks like and each extra Enter is a plausible duplicate escalation.
+  Claude keeps its full retry budget: it clears its composer on a landed Enter, so `pending` means the Enter was swallowed and only a retry recovers it, while an extra Enter on an already-cleared composer is a no-op.
   The composer guard below and the verified submit, not the harness set, are what keep any of these injections safe.
 - **Composer-state guard** - `inject_msg` reads the full `empty`/`pending`/`pending-unproven`/`unknown` verdict from `fm_backend_composer_state` and injects only when it is affirmatively `empty`.
   Every other or future verdict defers, including an unreadable pane, ambiguous geometry, a blank unidentified row, and a bare shell prompt left after the agent exits.

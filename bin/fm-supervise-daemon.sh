@@ -1190,10 +1190,11 @@ inject_msg() {  # <message> [state] [normal|max-defer]
   #
   #     The rendered signature is the whole busy verdict on the terminal-backed
   #     launcher path (bin/fm-afk-launch.sh passes the captain's harness in;
-  #     tmux has no native busy state), which covers codex, kimi, and cursor.
-  #     muse has NO arm in fm_busy_lines_match, so it never reads busy there at
-  #     all and is injected into on any tick; registering a muse signature needs
-  #     live verification against the real harness and is not done here.
+  #     tmux has no native busy state), which covers codex, pi, pi-signed, grok,
+  #     kimi, and cursor. muse has NO arm in fm_busy_lines_match, so it never
+  #     reads busy there at all and is injected into on any tick; registering a
+  #     muse signature needs live verification against the real harness and is
+  #     not done here.
   if pane_is_busy "$target" "$backend"; then
     harness=$(fm_daemon_primary_harness)
     busy=1
@@ -1229,18 +1230,23 @@ inject_msg() {  # <message> [state] [normal|max-defer]
   # backend=tmux this calls fm_backend_tmux_send_text_submit, a verbatim
   # re-export of fm_tmux_submit_core - byte-identical to calling it directly.
   #
-  # ONE Enter into a busy pane, whatever the configured budget. A busy pane is
-  # exactly where Enter QUEUES instead of submitting-and-clearing, so each extra
-  # Enter is a plausible extra queued turn: opencode keeps its typed text visible
-  # until the running turn ends, so its composer reads `pending` on every pass and
-  # the retry budget is spent in full before fm_composer_queued_enter_verdict
-  # converts it, which would deliver the captain the same digest once per retry.
-  # Claude clears its composer and confirms on the first Enter, so it never spends
-  # the budget and the cap costs it nothing. This is scoped to away-mode injection:
-  # INJECT_CONFIRM_RETRIES_DEFAULT and the shared submit cores' retry contract are
-  # unchanged for every other caller, including the idle path here.
+  # ONE Enter into a busy pane whose harness keeps a queued line VISIBLE
+  # (fm_composer_busy_queue_keeps_text, bin/fm-composer-lib.sh, which owns both
+  # per-harness facts). There a post-Enter `pending` is what a successful queue
+  # LOOKS like, so every retry is a plausible second queued turn and the captain
+  # would receive one copy of the digest per Enter.
+  # Every other harness keeps its full budget, and claude in particular MUST:
+  # claude clears its composer on a landed Enter, so `pending` means the Enter was
+  # swallowed and the digest is sitting unsent. The retries are what recover it,
+  # and an extra Enter on an already-cleared claude composer is a no-op rather
+  # than a duplicate delivery. Capping claude would turn a single swallow into a
+  # false confirmation that cleared the buffer with the text still unsent.
+  # This is scoped to away-mode injection: INJECT_CONFIRM_RETRIES_DEFAULT and the
+  # shared submit cores' retry contract are unchanged for every other caller.
   retries=${FM_INJECT_CONFIRM_RETRIES:-$INJECT_CONFIRM_RETRIES_DEFAULT}
-  [ -z "$busy" ] || retries=1
+  if [ -n "$busy" ] && fm_composer_busy_queue_keeps_text "$harness"; then
+    retries=1
+  fi
   sleep_s=${FM_INJECT_CONFIRM_SLEEP:-$INJECT_CONFIRM_SLEEP_DEFAULT}
   verdict=$(fm_backend_send_text_submit "$backend" "$target" "$msg" "$retries" "$sleep_s" "$sleep_s")
   # (5) The max-defer attempt into an unverified busy harness is never

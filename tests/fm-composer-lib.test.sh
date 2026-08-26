@@ -692,6 +692,28 @@ test_busy_queues_input_is_verified_per_harness() {
   pass "fm_composer_busy_queues_input: claude and opencode queue on their own live proof; every unproven and the empty harness does not"
 }
 
+# Queueing and keeping the queued text VISIBLE are two different per-harness
+# facts, and conflating them is what would let a busy claude injection be capped
+# to a single Enter. On claude a post-Enter `pending` is a SWALLOW, so its retry
+# budget is the only recovery; on opencode the same read is the queue itself, so
+# a retry would queue a second copy.
+test_busy_queue_visibility_is_separate_from_queueing() {
+  local harness
+  fm_composer_busy_queue_keeps_text opencode \
+    || fail "opencode 1.18.4 keeps the typed text visible until the running turn ends"
+  fm_composer_busy_queues_input claude \
+    || fail "claude must still be a queueing harness"
+  if fm_composer_busy_queue_keeps_text claude; then
+    fail "claude clears its composer on a landed Enter, so treating its pending read as a visible queue would confirm a swallow"
+  fi
+  for harness in codex pi pi-signed grok kimi cursor muse unknown ''; do
+    if fm_composer_busy_queue_keeps_text "$harness"; then
+      fail "'${harness:-<empty>}' has no recorded queued-text-stays-visible behavior"
+    fi
+  done
+  pass "fm_composer_busy_queue_keeps_text: only opencode; claude queues without keeping its text, so the two sets stay distinct"
+}
+
 # The live claude-on-herdr idle screen, captured from Claude Code 2.1.x on Herdr
 # 0.7.5 (2026-08-26): a bare `❯` between two solid `─` rules. That separator
 # pair is structurally pi's separated shape, so herdr's `agent get` reporting
@@ -716,4 +738,5 @@ test_claude_on_herdr_idle_screen_with_live_identity() {
 }
 
 test_busy_queues_input_is_verified_per_harness
+test_busy_queue_visibility_is_separate_from_queueing
 test_claude_on_herdr_idle_screen_with_live_identity
