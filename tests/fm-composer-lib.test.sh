@@ -677,12 +677,19 @@ test_busy_queues_input_is_verified_per_harness() {
   local harness
   fm_composer_busy_queues_input claude \
     || fail "claude is verified to queue a submitted line while a turn runs"
-  for harness in codex pi pi-signed opencode grok kimi cursor muse unknown ''; do
+  # opencode 1.18.4 accepts a mid-turn Enter and queues it for after the current
+  # turn, the exact property this set gates on; it is why both submit cores
+  # already carry a queued-Enter exception for it. It keeps the typed text
+  # visible while queued, so its confirmation runs through
+  # fm_composer_queued_enter_verdict rather than a cleared composer.
+  fm_composer_busy_queues_input opencode \
+    || fail "opencode 1.18.4 is verified to queue a mid-turn Enter for after the current turn"
+  for harness in codex pi pi-signed grok kimi cursor muse unknown ''; do
     if fm_composer_busy_queues_input "$harness"; then
-      fail "'${harness:-<empty>}' must not inherit claude's queueing behavior without its own live proof"
+      fail "'${harness:-<empty>}' has no live proof that it queues a mid-turn submit and must not borrow another harness's"
     fi
   done
-  pass "fm_composer_busy_queues_input: only the verified harness queues; every other and the empty harness defers"
+  pass "fm_composer_busy_queues_input: claude and opencode queue on their own live proof; every unproven and the empty harness does not"
 }
 
 # The live claude-on-herdr idle screen, captured from Claude Code 2.1.x on Herdr

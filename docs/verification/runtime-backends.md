@@ -312,7 +312,10 @@ submit verdict: empty
 The composer remains the gate that makes this safe.
 A Claude pane parked on a permission dialog was measured the same day: `agent get` reported `blocked` and the composer read `pending`, because the dialog's own selection rows are content, so keystrokes that would answer the prompt are refused rather than injected.
 
-`bin/fm-composer-lib.sh` records the harnesses verified to queue; an unlisted harness still defers.
+`bin/fm-composer-lib.sh` records the harnesses verified to queue.
+OpenCode is the second entry, and it is admitted on the evidence already pinned above rather than on a new measurement: OpenCode 1.18.4 accepts a mid-turn Enter and queues it for after the current turn, which is the exact property this set gates on, and is why both submit cores already carry a queued-Enter exception for it.
+The two entries differ only in what the post-Enter composer shows, which changes how delivery is confirmed and not whether it happens: Claude clears its composer, so the submit reads `empty` directly, while OpenCode keeps the typed text visible until the turn ends and reaches the same confirmation through `fm_composer_queued_enter_verdict`.
+An unlisted harness is not assumed to queue and waits for an idle window instead, but that wait is bounded: `bin/fm-supervise-daemon.sh`'s max-defer escape attempts delivery anyway once the buffer passes `FM_MAX_DEFER_SECS`, under the same composer guard and verified submit, so no primary is silently starved.
 Refresh the live proof with:
 
 ```sh

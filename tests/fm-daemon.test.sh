@@ -1879,6 +1879,57 @@ test_inject_msg_busy_pane_still_honors_the_composer_guard() {
   pass "inject_msg: half-typed, ambiguous, and unreadable composers still defer on a busy queueing primary"
 }
 
+# A busy pane on an UNVERIFIED harness is a wait, not a refusal. tmux exposes no
+# native busy state, so on the terminal-backed launcher path the rendered
+# signature is the whole busy verdict for codex, kimi, muse, and cursor: without
+# a bounded wait, handing the daemon the captain's real harness would trade
+# claude's wedge for theirs. housekeeping's max-defer escape is what bounds it.
+test_max_defer_delivers_into_a_busy_unverified_harness() {
+  local dir state sent
+  dir=$(make_supercase maxdefer-busy-unverified)
+  state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
+  escalate_add "$state" "needs-decision: pick A"
+  echo $(( $(date +%s) - 600 )) > "$state/.subsuper-escalations.since"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    pane_is_busy() { return 0; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+    FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="fakepane" \
+      FM_ESCALATE_BATCH_SECS=99999 FM_MAX_DEFER_SECS=60 housekeeping "$state"
+  ) || fail "max-defer busy-unverified housekeeping subshell failed"
+  grep -F 'pick A' "$sent" >/dev/null \
+    || fail "max-defer never delivered into a busy pane on a harness with no verified queueing behavior"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "buffer not cleared after a delivered max-defer flush"
+  [ ! -e "$state/.subsuper-inject-wedged" ] || fail "a delivered max-defer flush still raised a wedge alarm"
+  pass "max-defer: a busy pane on an unverified harness delivers rather than deferring forever"
+}
+
+# The escape ends the wait; it never lowers the composer bar. A busy pane whose
+# state genuinely cannot be read safely still refuses, and that refusal alarms.
+test_max_defer_busy_unverified_still_alarms_on_an_unreadable_composer() {
+  local dir state sent
+  dir=$(make_supercase maxdefer-busy-unverified-guard)
+  state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
+  escalate_add "$state" "needs-decision: pick B"
+  echo $(( $(date +%s) - 600 )) > "$state/.subsuper-escalations.since"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    pane_is_busy() { return 0; }
+    fm_backend_composer_state() { printf 'unknown'; }
+    fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+    FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="fakepane" \
+      FM_ESCALATE_BATCH_SECS=99999 FM_MAX_DEFER_SECS=60 housekeeping "$state"
+  ) || fail "max-defer busy-unverified composer-guard housekeeping subshell failed"
+  [ ! -s "$sent" ] || fail "max-defer typed into a busy pane whose composer was never proven empty"
+  [ -s "$state/.subsuper-inject-wedged" ] \
+    || fail "an unreadable composer on a busy unverified primary stalled without raising the wedge alarm"
+  [ -s "$state/.subsuper-escalations" ] || fail "buffer lost while the composer was unreadable"
+  pass "max-defer: an unreadable composer on a busy unverified primary still refuses, and the stall is visible"
+}
+
 test_inject_msg_herdr_composer_guard_defers() {
   local dir state
   dir=$(make_supercase inject-herdr-pending)
@@ -2071,6 +2122,8 @@ test_pane_input_pending_herdr_dispatch
 test_inject_msg_herdr_busy_guard_defers
 test_inject_msg_busy_pane_delivers_for_a_queueing_harness
 test_inject_msg_busy_pane_still_honors_the_composer_guard
+test_max_defer_delivers_into_a_busy_unverified_harness
+test_max_defer_busy_unverified_still_alarms_on_an_unreadable_composer
 test_inject_msg_herdr_composer_guard_defers
 test_inject_msg_herdr_pane_gone_defers
 test_inject_msg_herdr_submits_through_backend_dispatch

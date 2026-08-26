@@ -1350,12 +1350,24 @@ fm_composer_queued_enter_verdict() {  # <composer-state> <busy|idle|unknown>
 # Sampling that pane separately showed the busy reads tracking real turns rather
 # than sticking, so the guard was right and the policy was wrong.
 #
-# Queueing is vendor behavior, so an UNLISTED harness keeps deferring instead of
-# inheriting Claude's. Adding one means proving it live, the same discipline
-# every rendered signature above follows; the live guard is
-# tests/fm-herdr-busy-inject-live-e2e.test.sh. Newline-separated and consumed by
-# `read` for the same reasons as the glyph sets above.
-FM_COMPOSER_BUSY_QUEUEING_HARNESSES=$(printf '%s\n' 'claude')
+# Queueing is vendor behavior, so an UNLISTED harness is never assumed to queue.
+# Adding one means live proof, the same discipline every rendered signature above
+# follows. Claude's is tests/fm-herdr-busy-inject-live-e2e.test.sh. Opencode's
+# predates this set: opencode 1.18.4 accepts a mid-turn Enter and queues it for
+# after the current turn, which is why the submit cores already carry a
+# queued-Enter exception for it (bin/fm-tmux-lib.sh, bin/backends/herdr.sh) and
+# why docs/tmux-backend.md and docs/verification/runtime-backends.md pin it. The
+# two differ only in what the post-Enter composer shows: claude clears it, while
+# opencode keeps the typed text visible until the turn ends, so opencode reaches
+# confirmation through fm_composer_queued_enter_verdict instead.
+#
+# An unlisted harness does not wedge. It waits for an idle window, and
+# bin/fm-supervise-daemon.sh's max-defer escape attempts delivery anyway once the
+# wait passes FM_MAX_DEFER_SECS, under the same composer guard and proof-carrying
+# submit. Membership here buys immediate mid-turn delivery, not the only path to
+# it. Newline-separated and consumed by `read` for the same reasons as the glyph
+# sets above.
+FM_COMPOSER_BUSY_QUEUEING_HARNESSES=$(printf '%s\n' 'claude' 'opencode')
 
 # fm_composer_busy_queues_input: 0 when <harness> is one of them. An empty or
 # unknown harness is never assumed to queue.

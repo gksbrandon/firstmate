@@ -50,10 +50,11 @@
 #     PAUSE_RESURFACE_SECS recheck, never a wedge escalation.
 #     Crewmates are autonomous, so a delayed stale response does not stall a
 #     healthy crewmate's own progress.
-#     Buffered escalation delivery also has a max-defer alarm: if a digest stays
-#     undelivered past FM_MAX_DEFER_SECS, the daemon retries a normal flush and
-#     writes state/.subsuper-inject-wedged and attempts a configurable active
-#     alert if submit still cannot be confirmed.
+#     Buffered escalation delivery also has a max-defer escape: if a digest stays
+#     undelivered past FM_MAX_DEFER_SECS, the daemon retries the flush in
+#     max-defer mode (which stops waiting out a busy pane) and writes
+#     state/.subsuper-inject-wedged and attempts a configurable active alert if
+#     submit still cannot be confirmed.
 #   - Cheap heartbeat catch-all: every HEARTBEAT_SCAN_SECS the daemon greps all
 #     state/*.status for a captain-relevant line the per-wake classifier might
 #     have missed (e.g. a status verb outside CAPTAIN_RE) and escalates it.
@@ -648,8 +649,10 @@ escalate_add() {  # <state> <distilled-item>
 # Flush the escalation buffer as ONE batched, single-line digest to the
 # supervisor pane. Returns 0 on successful inject (or empty buffer), non-zero on
 # inject failure (buffer preserved for retry / catch-up).
-escalate_flush() {  # <state>
-  local state=$1 buf item n msg
+# <mode> is inject_msg's busy-guard mode: `normal` for an ordinary tick, and
+# `max-defer` for housekeeping's escape after FM_MAX_DEFER_SECS.
+escalate_flush() {  # <state> [mode]
+  local state=$1 mode=${2:-normal} buf item n msg
   buf="$state/.subsuper-escalations"
   [ -s "$buf" ] || return 0
   n=$(wc -l < "$buf" 2>/dev/null || echo 0)
@@ -658,7 +661,7 @@ escalate_flush() {  # <state>
   # Single-line wrapper: no embedded newlines (inject_msg also collapses as a
   # safety net, but keeping the source single-line makes the intent explicit).
   msg=$(printf 'Supervisor escalate (%s event(s)): %s (pre-read; re-arm not needed — watcher daemon-managed)' "$n" "$msg")
-  if inject_msg "$msg" "$state"; then : > "$buf"; rm -f "${buf}.since" "$state/.subsuper-inject-wedged"; return 0; fi
+  if inject_msg "$msg" "$state" "$mode"; then : > "$buf"; rm -f "${buf}.since" "$state/.subsuper-inject-wedged"; return 0; fi
   return 1
 }
 
@@ -955,8 +958,9 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #  1) batch flush: if the escalation buffer's oldest content is older than
 #     ESCALATE_BATCH_SECS (or batching is disabled), inject one digest.
 #  1b) max-defer escape: if the buffer is STILL undelivered past MAX_DEFER_SECS,
-#     attempt one normal delivery; if it cannot confirm, raise the wedge alarm.
-#     Never silently defer forever.
+#     attempt one delivery in max-defer mode, which also stops waiting out a busy
+#     pane on a harness with no verified queueing behavior; if it cannot confirm,
+#     raise the wedge alarm. Never silently defer forever.
 #  2) stale recheck: for each pending stale marker past STALE_ESCALATE_SECS,
 #     re-peek the pane; still idle -> escalate (wedge); resumed -> clear marker.
 #  2b) pause re-surface: for each declared-wait marker past PAUSE_RESURFACE_SECS,
@@ -981,8 +985,11 @@ housekeeping() {  # <state>
   fi
 
   # (1b) max-defer escape. If anything is still buffered past MAX_DEFER_SECS,
-  # retry the normal delivery path. If that still cannot confirm, raise a loud
-  # wedge alarm while preserving the buffer.
+  # retry delivery in max-defer mode: a busy pane on a harness with no verified
+  # queueing behavior waited for an idle window that never came, so this attempt
+  # goes ahead under the unchanged composer guard and verified submit rather than
+  # waiting forever. If it still cannot confirm, raise a loud wedge alarm while
+  # preserving the buffer.
   max_defer=${FM_MAX_DEFER_SECS:-$MAX_DEFER_SECS_DEFAULT}
   if afk_active "$state" && [ "$max_defer" -gt 0 ] && [ -s "$state/.subsuper-escalations" ]; then
     oldest=$(_oldest_line_age "$state/.subsuper-escalations")
@@ -991,7 +998,7 @@ housekeeping() {  # <state>
     # and waits.
     if [ "$oldest" -ge "$max_defer" ] \
        && [ "$(_file_age "$state/.subsuper-inject-wedged")" -ge "$max_defer" ]; then
-      if escalate_flush "$state"; then
+      if escalate_flush "$state" max-defer; then
         log "inject recovered: max-defer flush succeeded after ${oldest}s undelivered"
         rm -f "$state/.subsuper-inject-wedged"
       else
@@ -1109,10 +1116,11 @@ window_for_task() {  # <task-key> [state]
 # --- injection --------------------------------------------------------------
 # inject_msg: send one escalation digest to the supervisor pane.
 # Returns 0 on successful inject (or empty buffer), non-zero if the pane is
-# gone, the supervisor is busy on a harness that does not queue input, afk is
-# inactive, or the verified submit cannot be confirmed after bounded retries. On
-# non-zero the caller preserves the buffer so the escalation survives for the
-# next cycle or the catch-up flush.
+# gone, afk is inactive, the supervisor is busy on a harness not verified to
+# queue input (in `normal` mode; see the busy guard below for how that wait ends),
+# the composer is not affirmatively empty, or the verified submit cannot be
+# confirmed after bounded retries. On non-zero the caller preserves the buffer so
+# the escalation survives for the next cycle or the catch-up flush.
 #
 # Submit model:
 #   - TYPE ONCE, then submit with Enter. Never retype the digest: a swallowed
@@ -1127,9 +1135,10 @@ window_for_task() {  # <task-key> [state]
 #     after dim/faint ghost text and borders are ignored (a human's half-typed
 #     line, or a previous injection's unsent text), defer entirely - injecting
 #     would merge with the human's text.
-inject_msg() {  # <message> [state]
-  local msg=$1 state target backend retries sleep_s verdict composer encoded harness
+inject_msg() {  # <message> [state] [normal|max-defer]
+  local msg=$1 state mode target backend retries sleep_s verdict composer encoded harness
   state="${2:-$(_state_root)}"
+  mode="${3:-normal}"
   # (1) Presence-gate: inject ONLY when afk is active. When afk is off, the
   # daemon self-handles and stays quiet; firstmate drives the normal always-on
   # watcher triage. Escalations buffer and survive for the next catch-up flush.
@@ -1149,21 +1158,39 @@ inject_msg() {  # <message> [state]
   # discovery), matching this function's pre-existing default assumption.
   backend="${FM_SUPERVISOR_BACKEND:-tmux}"
   fm_backend_target_exists "$backend" "$target" || return 1
-  # (3) Busy-guard: defer on an in-use supervisor pane, UNLESS the primary
-  #     harness queues a submitted line as its next turn
-  #     (fm_composer_busy_queues_input, bin/fm-composer-lib.sh, which owns the
-  #     verified set). An absolute refusal here is what wedged the 2026-08-26
-  #     away stretch: a firstmate primary can stay mid-turn for over an hour, so
-  #     "wait for an idle pane" means "never deliver". For a queueing harness the
-  #     composer guard below and the proof-carrying submit are what keep the
-  #     injection safe - an unconfirmed submit still preserves the buffer.
+  # (3) Busy-guard: a busy supervisor pane is a WAIT, never a refusal. An
+  #     absolute refusal here is what wedged the 2026-08-26 away stretch: a
+  #     firstmate primary can stay mid-turn for over an hour, so "wait for an
+  #     idle pane" means "never deliver". Two ways past a busy pane, both of
+  #     which still face the composer guard below and the proof-carrying submit:
+  #
+  #       a) The primary harness is VERIFIED to queue a submitted line as its
+  #          next turn (fm_composer_busy_queues_input, bin/fm-composer-lib.sh,
+  #          which owns the set). Deliver immediately, mid-turn.
+  #       b) Every other harness waits for an idle window instead, because
+  #          queueing is vendor behavior and cannot be assumed. That wait is
+  #          BOUNDED: housekeeping's max-defer escape re-enters here with
+  #          mode=max-defer once the buffer passes FM_MAX_DEFER_SECS, and
+  #          attempts delivery anyway rather than deferring forever.
+  #
+  #     So the harness boundary decides how LONG a busy pane delays an
+  #     escalation, not whether it ever arrives. This matters on the
+  #     terminal-backed launcher path (bin/fm-afk-launch.sh), where the captain's
+  #     harness is passed in and tmux has no native busy state, so the rendered
+  #     signature is the whole busy verdict for codex, kimi, muse, and cursor.
+  #     Deferral is reserved for state that cannot be read safely at all, which
+  #     is the composer guard's job below and which still alarms via
+  #     inject_wedge_alarm.
   if pane_is_busy "$target" "$backend"; then
     harness=$(fm_daemon_primary_harness)
-    if ! fm_composer_busy_queues_input "$harness"; then
+    if fm_composer_busy_queues_input "$harness"; then
+      log "inject into a busy supervisor pane: $harness queues a submitted line as its next turn"
+    elif [ "$mode" = max-defer ]; then
+      log "inject into a busy supervisor pane past max-defer: $harness has no verified queueing behavior, so delivery waited for an idle window and none came; the composer guard and the verified submit still gate this attempt"
+    else
       log "inject deferred: supervisor pane busy (agent mid-turn)"
       return 1
     fi
-    log "inject into a busy supervisor pane: $harness queues a submitted line as its next turn"
   fi
   #   b) Composer-guard: inject ONLY into a confirmed-empty GENUINE agent
   #      composer. The shared classifier (fm_backend_composer_state ->

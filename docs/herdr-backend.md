@@ -252,8 +252,9 @@ Away-mode injection proceeds only on an affirmative `empty` result, never on unk
 This prevents a dead agent pane from receiving and possibly executing an escalation as shell input.
 
 That affirmative composer result, not an idle pane, is what gates an away-mode injection.
-A Firstmate primary can hold a single turn for hours, so refusing every busy pane meant refusing delivery outright; `bin/fm-composer-lib.sh` owns the set of harnesses verified to queue a submitted line as their next turn, and only those may be injected into mid-turn.
+A Firstmate primary can hold a single turn for hours, so refusing every busy pane meant refusing delivery outright; `bin/fm-composer-lib.sh` owns the set of harnesses verified to queue a submitted line as their next turn, and only those are injected into mid-turn on sight.
 Claude is verified there, so an escalation typed into its empty composer during a turn is answered when that turn ends rather than lost.
+An unlisted harness waits for an idle window rather than borrowing that proof, and the daemon's max-defer escape ends that wait with a delivery attempt instead of an indefinite stall.
 `bin/fm-test-run.sh` runs the opt-in live guard that refreshes this claim.
 
 The current operational envelope starts with U+2063 and `FIRSTMATE_OP: `.
