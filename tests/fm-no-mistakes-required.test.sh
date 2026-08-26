@@ -5,7 +5,13 @@ set -u
 # shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-ACTION_REF=32d396ac0f29135daf7fcb9964aba9d5f4e796d6
+# The gate workflow's pin is the only source of truth for which action commit CI
+# runs; a second copy here would let the suite certify an implementation the gate
+# does not use.
+GATE_WORKFLOW="$ROOT/.github/workflows/no-mistakes-required.yml"
+ACTION_REF=$(grep -o 'require-no-mistakes@[0-9a-f]\{40\}' "$GATE_WORKFLOW" | head -1)
+ACTION_REF=${ACTION_REF##*@}
+[ -n "$ACTION_REF" ] || fail "$GATE_WORKFLOW does not pin require-no-mistakes to a commit SHA"
 TMP_ROOT=$(fm_test_tmproot fm-no-mistakes-required)
 VERIFY="$TMP_ROOT/verify.py"
 OLD_SHA=1111111111111111111111111111111111111111
@@ -40,6 +46,20 @@ test_matching_head_and_completed_steps_pass() {
   pass "shared action accepts a matching head_sha with completed required steps"
 }
 
+test_attestation_without_signature_fails() {
+  local body output rc
+  body="<!-- no-mistakes:pipeline -->
+<!-- no-mistakes-pipeline-attestation:v1 {\"head_sha\":\"$NEW_SHA\",\"steps\":$COMPLETED_STEPS} -->"
+  rc=0
+  output=$(run_verifier "$body" "$NEW_SHA") || rc=$?
+  [ "$rc" -ne 0 ] || fail "shared action accepted a body carrying no no-mistakes signature line"
+  assert_contains "$output" "This PR was not raised through no-mistakes." \
+    "missing-signature failure did not report the not-raised-via-no-mistakes guidance"
+  assert_contains "$output" "$SIGNATURE" \
+    "missing-signature failure did not quote the exact line the body must carry"
+  pass "shared action rejects a head-bound complete attestation with no signature line"
+}
+
 test_mismatched_head_fails_with_both_shas() {
   local body output rc
   body="$SIGNATURE
@@ -68,5 +88,6 @@ test_missing_head_fails() {
 
 fetch_shared_verifier
 test_matching_head_and_completed_steps_pass
+test_attestation_without_signature_fails
 test_mismatched_head_fails_with_both_shas
 test_missing_head_fails
