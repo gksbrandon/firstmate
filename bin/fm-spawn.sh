@@ -34,10 +34,11 @@
 #   the new incarnation.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
-#   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
-#   axes chosen by firstmate at intake. They are only threaded into harnesses whose
-#   installed CLIs were verified to support that axis; unsupported axes are omitted
-#   from that harness's launch rather than guessed.
+#   --model <name> and --effort <low|medium|high|xhigh|max|ultra> are concrete
+#   profile axes chosen by firstmate at intake. ultra is Codex-only. Values are
+#   threaded only into harnesses whose installed CLIs were verified to support
+#   them; unsupported axes are omitted from that harness's launch rather than
+#   guessed.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -346,8 +347,8 @@ if [ "$TRACEPARENT_SET" -eq 1 ]; then
   }
 fi
 case "$EFFORT" in
-  ''|low|medium|high|xhigh|max) ;;
-  *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
+  ''|low|medium|high|xhigh|max|ultra) ;;
+  *) echo "error: --effort must be one of low, medium, high, xhigh, max, ultra" >&2; exit 1 ;;
 esac
 
 # --relaunch reuses an existing task's endpoint, worktree, project, and kind,
@@ -473,7 +474,7 @@ spawn_remote_secondmate() {
       ;;
   esac
   case "$effort" in
-    -|low|medium|high|xhigh|max) ;;
+    -|low|medium|high|xhigh|max|ultra) ;;
     *)
     fm_lock_release "$registry_lock" || true
     fm_lock_release "$SPAWN_TASK_LOCK" || true
@@ -1288,8 +1289,8 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
     SM_EFFORT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-effort)
     if [ -n "$SM_EFFORT" ]; then
       case "$SM_EFFORT" in
-        low|medium|high|xhigh|max) EFFORT=$SM_EFFORT ;;
-        *) echo "warning: config/secondmate-harness effort token '$SM_EFFORT' is not one of low, medium, high, xhigh, max; ignoring" >&2 ;;
+        low|medium|high|xhigh|max|ultra) EFFORT=$SM_EFFORT ;;
+        *) echo "warning: config/secondmate-harness effort token '$SM_EFFORT' is not one of low, medium, high, xhigh, max, ultra; ignoring" >&2 ;;
       esac
     fi
   fi
@@ -1392,11 +1393,13 @@ effort_flag_for_harness() {
       esac
       ;;
     codex)
-      # The installed codex config schema uses model_reasoning_effort, and the
-      # bundled model catalog advertises low|medium|high|xhigh. Omit max rather
-      # than passing an unsupported value.
+      # codex-cli 0.149.1's schema accepts model_reasoning_effort values
+      # low|medium|high|xhigh|ultra. ultra is exclusive to gpt-5.6-sol, and the
+      # currently nix-pinned PATH codex 0.133.0 rejects it outright until its
+      # separately owned cutover. Omit max rather than passing an unsupported
+      # value.
       case "$effort" in
-        low|medium|high|xhigh) printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"$effort\"")" ;;
+        low|medium|high|xhigh|ultra) printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"$effort\"")" ;;
       esac
       ;;
     grok)
@@ -1409,8 +1412,9 @@ effort_flag_for_harness() {
       esac
       ;;
     pi|pi-signed)
-      # Pi 0.80.6 accepts the full shared effort vocabulary, including max, through
-      # its --thinking flag.
+      # Pi 0.80.6 accepts low through max through its --thinking flag. Pi has no
+      # ultra concept and its ladder ends at max, so the Codex-only ultra is
+      # omitted rather than passed to a flag that rejects it.
       case "$effort" in
         low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
       esac
@@ -1418,10 +1422,13 @@ effort_flag_for_harness() {
     muse)
       # muse 0.1.0-R708.1 --reasoning-effort accepts none|minimal|low|medium|
       # high|xhigh|ultra and defaults to high, so low..xhigh map straight across.
-      # ultra is muse's max-CLASS level, so firstmate's max maps onto it - but
-      # only ever as an EXPLICIT captain choice, never as a fallback, because
-      # AGENTS.md section 4 forbids selecting max without captain preference and
-      # the omitted effort here leaves muse on its own high default. muse's extra
+      # muse's native ultra is muse's own max-CLASS level and is unrelated to the
+      # Codex-only ultra profile value emitted above. firstmate's max maps onto
+      # muse's level, but only ever as an EXPLICIT captain choice, never as a
+      # fallback, because AGENTS.md section 4 forbids selecting max without
+      # captain preference and the omitted effort here leaves muse on its own
+      # high default. The Codex-only ultra is therefore deliberately absent from
+      # the case below and falls through to that same high default. muse's extra
       # none/minimal levels sit below firstmate's shared vocabulary and are
       # deliberately unreachable rather than remapped onto low.
       case "$effort" in

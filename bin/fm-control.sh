@@ -243,8 +243,8 @@ fi
 [ "$MODEL_SET" = 0 ] || [ -n "$NEW_MODEL" ] || die "--model requires a non-empty value"
 [ "$EFFORT_SET" = 0 ] || [ -n "$NEW_EFFORT" ] || die "--effort requires a non-empty value"
 case "$NEW_EFFORT" in
-  ''|low|medium|high|xhigh|max) ;;
-  *) die "--effort must be one of low, medium, high, xhigh, max" ;;
+  ''|low|medium|high|xhigh|max|ultra) ;;
+  *) die "--effort must be one of low, medium, high, xhigh, max, ultra" ;;
 esac
 
 # --- exact task-id resolution ----------------------------------------------
@@ -632,9 +632,9 @@ resolve_relaunch_profile() {
     CONFIG_MODEL=$("$SCRIPT_DIR/fm-harness.sh" secondmate-model 2>/dev/null || true)
     CONFIG_EFFORT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-effort 2>/dev/null || true)
     case "$CONFIG_EFFORT" in
-      ''|low|medium|high|xhigh|max) ;;
+      ''|low|medium|high|xhigh|max|ultra) ;;
       *)
-        echo "warning: config/secondmate-harness effort token '$CONFIG_EFFORT' is not one of low, medium, high, xhigh, max; ignoring" >&2
+        echo "warning: config/secondmate-harness effort token '$CONFIG_EFFORT' is not one of low, medium, high, xhigh, max, ultra; ignoring" >&2
         CONFIG_EFFORT=
         ;;
     esac

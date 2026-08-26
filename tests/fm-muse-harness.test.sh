@@ -290,7 +290,18 @@ EOF
     || fail "muse spawn without an effort axis failed"
   launch=$(cat "$home/launch.log")
   assert_not_contains "$launch" '--reasoning-effort' "muse spawn invented an effort when none was chosen"
-  pass "muse maps the shared effort vocabulary and reaches ultra only via explicit max"
+
+  rec=$(make_spawn_case effort-codex-ultra)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$rec
+EOF
+  run_muse_spawn "$home" "$proj" "$wt" "$fakebin" "$id" \
+    --mode no-mistakes --yolo off --effort ultra >/dev/null \
+    || fail "muse spawn with codex-only ultra failed"
+  launch=$(cat "$home/launch.log")
+  assert_grep 'effort=ultra' "$home/state/$id.meta" "muse meta did not retain codex-only ultra"
+  assert_not_contains "$launch" '--reasoning-effort' "muse launch exposed codex-only ultra directly"
+  pass "muse maps max to its ultra tier but omits the codex-only ultra profile value"
 }
 
 # An unauthenticated muse pane does not exit: it sits on an OAuth device-code
