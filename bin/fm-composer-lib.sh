@@ -1337,6 +1337,40 @@ fm_composer_queued_enter_verdict() {  # <composer-state> <busy|idle|unknown>
   fi
 }
 
+# The harnesses VERIFIED to QUEUE a line submitted into an empty composer while
+# a turn is already running: the text becomes the next user turn rather than
+# being lost, merged into the running turn, or read as an answer to an
+# in-flight prompt.
+#
+# This set exists because the away daemon's busy guard was an absolute refusal,
+# and a firstmate primary that is continuously mid-turn never presents a sampled
+# idle window to win it. On the fleet's own claude-on-herdr primary (2026-08-26,
+# herdr 0.7.5) every 15-second poll across 71 minutes deferred on `pane busy`
+# and nothing else, so no escalation reached the captain until they came back.
+# Sampling that pane separately showed the busy reads tracking real turns rather
+# than sticking, so the guard was right and the policy was wrong.
+#
+# Queueing is vendor behavior, so an UNLISTED harness keeps deferring instead of
+# inheriting Claude's. Adding one means proving it live, the same discipline
+# every rendered signature above follows; the live guard is
+# tests/fm-herdr-busy-inject-live-e2e.test.sh. Newline-separated and consumed by
+# `read` for the same reasons as the glyph sets above.
+FM_COMPOSER_BUSY_QUEUEING_HARNESSES=$(printf '%s\n' 'claude')
+
+# fm_composer_busy_queues_input: 0 when <harness> is one of them. An empty or
+# unknown harness is never assumed to queue.
+fm_composer_busy_queues_input() {  # <harness>
+  local harness=${1:-} entry
+  [ -n "$harness" ] || return 1
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    [ "$entry" = "$harness" ] && return 0
+  done <<EOF
+$FM_COMPOSER_BUSY_QUEUEING_HARNESSES
+EOF
+  return 1
+}
+
 _fm_composer_classify_pi_rows() {  # <screen> <styled>
   local screen=$1 styled=$2 row raw content
   row=$((FM_COMPOSER_SCAN_PI_OPEN + 1))

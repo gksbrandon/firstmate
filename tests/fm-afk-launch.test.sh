@@ -15,8 +15,8 @@
 #   throwaway, NEVER-default HERDR_SESSION and asserts the default session is
 #   byte-identical via the fm-herdr-lab.sh fleet-state tripwire; the tmux path
 #   uses uniquely-named throwaway sessions killed by exact name. A harmless
-#   sleeper replaces the real daemon (FM_AFK_LAUNCH_ENTRY) so the test observes
-#   only the terminal lifecycle.
+#   stand-in replaces the real daemon (FM_AFK_LAUNCH_ENTRY) so the test observes
+#   only the terminal lifecycle and the environment the daemon is handed.
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,6 +30,38 @@ pass() { printf 'ok - %s\n' "$1"; }
 SLEEPER=$(mktemp "${TMPDIR:-/tmp}/fm-afk-sleeper.XXXXXX")
 printf '#!/usr/bin/env bash\nexec sleep 600\n' > "$SLEEPER"
 chmod +x "$SLEEPER"
+
+# A stand-in daemon that first records the environment it was launched with.
+# The record path is BAKED IN rather than passed as a variable because the
+# created terminal inherits its multiplexer server's environment, not this
+# test's.
+make_env_recorder() {  # <script-path> <record-path>
+  # shellcheck disable=SC2016 # The expansion belongs to the GENERATED script, not this one.
+  printf '#!/usr/bin/env bash\nprintf "%%s" "${FM_DAEMON_PRIMARY_HARNESS-<unset>}" > %q\nexec sleep 600\n' \
+    "$2" > "$1"
+  chmod +x "$1"
+}
+
+# The daemon's own terminal is a plain shell, so bin/fm-harness.sh run THERE
+# reports that shell rather than the captain's agent. Losing this passthrough
+# silently reverts the daemon to an `unknown` primary, which disables both its
+# rendered busy signature and its verified busy-queueing injection at once
+# (task fm-afk-inject-wedge).
+assert_daemon_inherited_harness() {  # <label> <record-path>
+  local label=$1 seen i=0
+  while [ "$i" -lt 100 ] && [ ! -s "$2" ]; do i=$((i + 1)); sleep 0.05; done
+  seen=$(cat "$2" 2>/dev/null || true)
+  case "$seen" in
+    ''|'<unset>')
+      fail "$label: the daemon was launched with no FM_DAEMON_PRIMARY_HARNESS, so it would detect its own terminal instead of the captain's agent"
+      return 0
+      ;;
+  esac
+  [ "$seen" = "$("$ROOT/bin/fm-harness.sh" 2>/dev/null || printf 'unknown')" ] \
+    || fail "$label: the daemon inherited '$seen', not the harness this launcher resolves"
+  pass "$label: the daemon inherits the captain's resolved harness"
+}
+
 TRACK_TMUX_SESSIONS=""
 GLOBAL_CLEANUP() {
   rm -f "$SLEEPER" 2>/dev/null || true
@@ -861,9 +893,11 @@ e2e_herdr() {
   before=$(fm_backend_herdr_cli "$SESSION" pane list --workspace "$cap_ws" 2>/dev/null | jq --arg t "$cap_tab" '[.result.panes[]?|select(.tab_id==$t)]|length')
   ws_before=$(fm_backend_herdr_cli "$SESSION" workspace list 2>/dev/null | jq '[.result.workspaces[]?]|length')
 
+  make_env_recorder "$home_tmp/recorder.sh" "$home_tmp/daemon-env"
   FM_HOME="$home_tmp" FM_STATE_OVERRIDE="$home_tmp/state" \
-    FM_SUPERVISOR_TARGET="$target" FM_SUPERVISOR_BACKEND=herdr FM_AFK_LAUNCH_ENTRY="$SLEEPER" \
+    FM_SUPERVISOR_TARGET="$target" FM_SUPERVISOR_BACKEND=herdr FM_AFK_LAUNCH_ENTRY="$home_tmp/recorder.sh" \
     "$LAUNCH" start >/dev/null 2>&1
+  assert_daemon_inherited_harness "herdr e2e" "$home_tmp/daemon-env"
 
   during=$(fm_backend_herdr_cli "$SESSION" pane list --workspace "$cap_ws" 2>/dev/null | jq --arg t "$cap_tab" '[.result.panes[]?|select(.tab_id==$t)]|length')
   ws_during=$(fm_backend_herdr_cli "$SESSION" workspace list 2>/dev/null | jq '[.result.workspaces[]?]|length')
@@ -901,9 +935,11 @@ e2e_tmux() {
   cap_pane=$(tmux display-message -p -t "$cap_session" '#{pane_id}')
   before=$(tmux list-panes -t "$cap_session" | wc -l | tr -d ' ')
 
+  make_env_recorder "$home_tmp/recorder.sh" "$home_tmp/daemon-env"
   FM_HOME="$home_tmp" FM_STATE_OVERRIDE="$home_tmp/state" \
-    FM_SUPERVISOR_TARGET="$cap_pane" FM_SUPERVISOR_BACKEND=tmux FM_AFK_LAUNCH_ENTRY="$SLEEPER" \
+    FM_SUPERVISOR_TARGET="$cap_pane" FM_SUPERVISOR_BACKEND=tmux FM_AFK_LAUNCH_ENTRY="$home_tmp/recorder.sh" \
     "$LAUNCH" start >/dev/null 2>&1
+  assert_daemon_inherited_harness "tmux e2e" "$home_tmp/daemon-env"
 
   during=$(tmux list-panes -t "$cap_session" | wc -l | tr -d ' ')
   rec=$(cut -f2 "$home_tmp/state/.afk-daemon-terminal" 2>/dev/null || true)

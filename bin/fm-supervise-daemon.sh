@@ -1109,9 +1109,10 @@ window_for_task() {  # <task-key> [state]
 # --- injection --------------------------------------------------------------
 # inject_msg: send one escalation digest to the supervisor pane.
 # Returns 0 on successful inject (or empty buffer), non-zero if the pane is
-# gone, the supervisor is busy, afk is inactive, or the verified submit cannot
-# be confirmed after bounded retries. On non-zero the caller preserves
-# the buffer so the escalation survives for the next cycle or the catch-up flush.
+# gone, the supervisor is busy on a harness that does not queue input, afk is
+# inactive, or the verified submit cannot be confirmed after bounded retries. On
+# non-zero the caller preserves the buffer so the escalation survives for the
+# next cycle or the catch-up flush.
 #
 # Submit model:
 #   - TYPE ONCE, then submit with Enter. Never retype the digest: a swallowed
@@ -1127,7 +1128,7 @@ window_for_task() {  # <task-key> [state]
 #     line, or a previous injection's unsent text), defer entirely - injecting
 #     would merge with the human's text.
 inject_msg() {  # <message> [state]
-  local msg=$1 state target backend retries sleep_s verdict composer encoded
+  local msg=$1 state target backend retries sleep_s verdict composer encoded harness
   state="${2:-$(_state_root)}"
   # (1) Presence-gate: inject ONLY when afk is active. When afk is off, the
   # daemon self-handles and stays quiet; firstmate drives the normal always-on
@@ -1148,10 +1149,21 @@ inject_msg() {  # <message> [state]
   # discovery), matching this function's pre-existing default assumption.
   backend="${FM_SUPERVISOR_BACKEND:-tmux}"
   fm_backend_target_exists "$backend" "$target" || return 1
-  # (3) Busy-guard: never inject into an in-use supervisor pane.
+  # (3) Busy-guard: defer on an in-use supervisor pane, UNLESS the primary
+  #     harness queues a submitted line as its next turn
+  #     (fm_composer_busy_queues_input, bin/fm-composer-lib.sh, which owns the
+  #     verified set). An absolute refusal here is what wedged the 2026-08-26
+  #     away stretch: a firstmate primary can stay mid-turn for over an hour, so
+  #     "wait for an idle pane" means "never deliver". For a queueing harness the
+  #     composer guard below and the proof-carrying submit are what keep the
+  #     injection safe - an unconfirmed submit still preserves the buffer.
   if pane_is_busy "$target" "$backend"; then
-    log "inject deferred: supervisor pane busy (agent mid-turn)"
-    return 1
+    harness=$(fm_daemon_primary_harness)
+    if ! fm_composer_busy_queues_input "$harness"; then
+      log "inject deferred: supervisor pane busy (agent mid-turn)"
+      return 1
+    fi
+    log "inject into a busy supervisor pane: $harness queues a submitted line as its next turn"
   fi
   #   b) Composer-guard: inject ONLY into a confirmed-empty GENUINE agent
   #      composer. The shared classifier (fm_backend_composer_state ->

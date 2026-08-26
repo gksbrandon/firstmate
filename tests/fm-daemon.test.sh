@@ -1824,11 +1824,59 @@ test_inject_msg_herdr_busy_guard_defers() {
     pane_is_busy() { return 0; }
     fm_backend_composer_state() { fail "composer_state should not be consulted once the busy-guard already deferred"; }
     fm_backend_send_text_submit() { fail "send_text_submit should not run when the busy-guard defers"; }
-    if FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" inject_msg "hello" "$state"; then
-      fail "inject_msg should defer (return non-zero) when the herdr supervisor pane is busy"
+    if FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      inject_msg "hello" "$state"; then
+      fail "inject_msg should defer (return non-zero) when a non-queueing primary's supervisor pane is busy"
     fi
   ) || fail "herdr busy-guard inject_msg subshell failed"
-  pass "inject_msg: herdr busy-guard defers before ever attempting a submit"
+  pass "inject_msg: a busy pane on a harness with no verified queueing behavior defers before any submit"
+}
+
+# The 2026-08-26 wedge: a firstmate primary that is continuously mid-turn never
+# presents an idle sample, so an absolute busy refusal buffered every escalation
+# for 71 minutes. Claude queues a submitted line as its next turn, so injecting
+# is delivery rather than corruption - proven live in
+# tests/fm-herdr-busy-inject-live-e2e.test.sh.
+test_inject_msg_busy_pane_delivers_for_a_queueing_harness() {
+  local dir state
+  dir=$(make_supercase inject-busy-queueing)
+  state="$dir/state"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    pane_is_busy() { return 0; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() {
+      case "$3" in *"hello"*) : ;; *) fail "digest text missing from send_text_submit: $3" ;; esac
+      printf 'empty'
+    }
+    FM_DAEMON_PRIMARY_HARNESS=claude FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      inject_msg "hello" "$state" \
+      || fail "inject_msg should deliver into a busy claude pane whose composer is affirmatively empty"
+  ) || fail "busy queueing-harness inject_msg subshell failed"
+  pass "inject_msg: a busy claude primary still receives the escalation, queued as its next turn"
+}
+
+# The busy escape must not become a composer escape: everything the composer
+# guard already refuses still refuses on a busy pane.
+test_inject_msg_busy_pane_still_honors_the_composer_guard() {
+  local dir state verdict
+  dir=$(make_supercase inject-busy-composer-guard)
+  state="$dir/state"
+  afk_enter "$state"
+  for verdict in pending pending-unproven unknown; do
+    (
+      fm_backend_target_exists() { return 0; }
+      pane_is_busy() { return 0; }
+      eval "fm_backend_composer_state() { printf '%s' '$verdict'; }"
+      fm_backend_send_text_submit() { fail "send_text_submit must not run when the composer reads $verdict"; }
+      if FM_DAEMON_PRIMARY_HARNESS=claude FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+        inject_msg "hello" "$state"; then
+        fail "inject_msg must still defer on a busy pane whose composer reads $verdict"
+      fi
+    ) || fail "busy composer-guard inject_msg subshell failed for $verdict"
+  done
+  pass "inject_msg: half-typed, ambiguous, and unreadable composers still defer on a busy queueing primary"
 }
 
 test_inject_msg_herdr_composer_guard_defers() {
@@ -2021,6 +2069,8 @@ test_primary_busy_guard_is_harness_scoped
 test_pane_is_busy_defaults_to_tmux_when_backend_omitted
 test_pane_input_pending_herdr_dispatch
 test_inject_msg_herdr_busy_guard_defers
+test_inject_msg_busy_pane_delivers_for_a_queueing_harness
+test_inject_msg_busy_pane_still_honors_the_composer_guard
 test_inject_msg_herdr_composer_guard_defers
 test_inject_msg_herdr_pane_gone_defers
 test_inject_msg_herdr_submits_through_backend_dispatch

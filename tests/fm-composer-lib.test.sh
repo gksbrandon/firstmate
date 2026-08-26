@@ -664,3 +664,49 @@ test_queued_enter_verdict_does_not_convert_other_states() {
 test_queued_enter_verdict_busy_pending_is_empty
 test_queued_enter_verdict_idle_pending_stays_pending
 test_queued_enter_verdict_does_not_convert_other_states
+
+# --- away-mode injection into a busy pane (task fm-afk-inject-wedge) ---------
+#
+# The away daemon used to refuse every busy supervisor pane outright, and a
+# firstmate primary that is continuously mid-turn never presents an idle sample
+# to win that guard: on 2026-08-26 every escalation buffered for 71 minutes.
+# The escape is a per-harness VERIFIED fact, not a relaxation, so the shapes
+# below still have to defer on their own merits.
+
+test_busy_queues_input_is_verified_per_harness() {
+  local harness
+  fm_composer_busy_queues_input claude \
+    || fail "claude is verified to queue a submitted line while a turn runs"
+  for harness in codex pi pi-signed opencode grok kimi cursor muse unknown ''; do
+    if fm_composer_busy_queues_input "$harness"; then
+      fail "'${harness:-<empty>}' must not inherit claude's queueing behavior without its own live proof"
+    fi
+  done
+  pass "fm_composer_busy_queues_input: only the verified harness queues; every other and the empty harness defers"
+}
+
+# The live claude-on-herdr idle screen, captured from Claude Code 2.1.x on Herdr
+# 0.7.5 (2026-08-26): a bare `❯` between two solid `─` rules. That separator
+# pair is structurally pi's separated shape, so herdr's `agent get` reporting
+# claude - not pi - is what routes the screen back to the bare-glyph reading.
+# The daemon injects only on `empty`, so this branch is what every away-mode
+# escalation depends on.
+test_claude_on_herdr_idle_screen_with_live_identity() {
+  local idle typed shell unstyled
+  idle=$'  Update available\n────────────────────────\n❯\n────────────────────────\n  Opus 5 | ctx: 4% used\n  bypass permissions on'
+  assert_screen "claude idle, herdr reports working" empty "$CAPS_STYLED" "$idle" '' "$(printf 'claude\tworking')"
+  assert_screen "claude idle, herdr reports idle" empty "$CAPS_STYLED" "$idle" '' "$(printf 'claude\tidle')"
+
+  typed=${idle/$'❯\n'/$'❯ half typed escalation\n'}
+  assert_screen "half-typed claude composer" pending "$CAPS_STYLED" "$typed" '' "$(printf 'claude\tidle')"
+
+  shell=${idle/$'❯\n'/$'$\n'}
+  assert_screen "dead shell between the rules" unknown "$CAPS_STYLED" "$shell" '' "$(printf 'claude\tidle')"
+
+  unstyled=${idle/$'❯\n'/$'❯ a rotating idle suggestion\n'}
+  assert_screen "unreadable ghost text without styling" unknown "$CAPS_PLAIN" "$unstyled"
+  pass "fm_composer_classify_screen: the live claude-on-herdr composer reads empty, while typed text, a dead shell, and unprovable ghost text defer"
+}
+
+test_busy_queues_input_is_verified_per_harness
+test_claude_on_herdr_idle_screen_with_live_identity

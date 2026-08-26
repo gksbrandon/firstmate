@@ -290,6 +290,41 @@ Observed 2026-08-19:
 ok - live Herdr submit confirm: Claude Code (2.1.236 (Claude Code)) on herdr 0.8.0 reports empty for a landed idle steer
 ```
 
+### Busy-pane injection
+
+Measured 2026-08-26 against Herdr 0.7.5 and Claude Code 2.1.224 in an isolated `fm-lab-` session, after an away-mode stretch in which every escalation stayed undelivered for 71 minutes.
+
+The daemon log recorded `inject deferred: supervisor pane busy (agent mid-turn)` on every 15-second poll and nothing else, so the composer read and the submit path were never reached.
+Sampling the primary confirmed the pane was genuinely working rather than misread: `herdr agent get` tracked real turns, flipping `working` to `idle` with its terminal title glyph, while the composer read `empty` throughout.
+Claude Code 2.1.x also renders no busy footer that `pane read` can see in any of its `visible`, `recent`, or `detection` sources, so native agent-state is the only usable busy signal for that harness.
+A Firstmate primary can therefore hold a single turn far longer than any poll interval, and an absolute busy refusal means never delivering.
+
+Injecting anyway was measured safe: with the composer affirmatively `empty`, `fm_backend_herdr_send_text_submit` returned `empty` on the first Enter, Claude rendered the text as a queued turn under `Press up to edit queued messages`, and answered it when the running turn ended.
+
+```text
+pre:  native=busy  composer=empty
+submit verdict: empty
+✻ Brewed for 1m 7s
+❯ MARKER-INJECT-7731 please reply with exactly: got 7731
+⏺ got 7731
+```
+
+The composer remains the gate that makes this safe.
+A Claude pane parked on a permission dialog was measured the same day: `agent get` reported `blocked` and the composer read `pending`, because the dialog's own selection rows are content, so keystrokes that would answer the prompt are refused rather than injected.
+
+`bin/fm-composer-lib.sh` records the harnesses verified to queue; an unlisted harness still defers.
+Refresh the live proof with:
+
+```sh
+FM_HERDR_BUSY_INJECT_LIVE=1 tests/fm-herdr-busy-inject-live-e2e.test.sh
+```
+
+Observed 2026-08-26:
+
+```text
+ok - live Herdr busy-pane injection: Claude Code (2.1.224 (Claude Code)) on herdr 0.7.5 queues and answers an escalation injected mid-turn, while an unverified harness still defers, in isolated session fm-lab-herdr-busy-injec-94709-9073
+```
+
 ### Prune and respawn
 
 The real label-collision reproduction is owned by:

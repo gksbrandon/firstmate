@@ -2995,6 +2995,33 @@ test_composer_state_bare_prompt_is_empty() {
   pass "fm_backend_herdr_composer_state: a bare '❯' composer row reads empty"
 }
 
+# The live claude-on-herdr idle shape (Claude Code 2.1.x on Herdr 0.7.5,
+# 2026-08-26): a bare `❯` between two solid `─` rules. The rules are
+# structurally pi's separated pair, so the shared classifier cannot decide the
+# screen from structure alone and asks for identity; this adapter owns answering
+# that with a LAZY `agent get` and re-classifying. The away daemon injects only
+# on `empty`, so losing that second pass silently strands every escalation
+# (task fm-afk-inject-wedge).
+test_composer_state_claude_rule_bounded_row_probes_identity() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-claude-rules"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' \
+    '      Update available! Run: brew upgrade claude-code' \
+    '──────────────────────────────────────────────────────' \
+    '❯' \
+    '──────────────────────────────────────────────────────' \
+    '  Opus 5 | ctx: 4% used' \
+    '  bypass permissions on (shift+tab to cycle)' > "$resp/1.out"
+  printf '{"result":{"agent":{"agent":"claude","agent_status":"working"}}}\n' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = empty ] || fail "the live claude-on-herdr idle composer must read empty, got '$out'"
+  assert_contains "$(cat "$log")" $'\x1f''agent'$'\x1f''get'$'\x1f''w1:p2' \
+    "the rule-bounded claude composer did not trigger the lazy identity probe"
+  pass "fm_backend_herdr_composer_state: claude's rule-bounded '❯' resolves to empty through the lazy identity probe"
+}
+
 test_composer_state_styled_placeholder_draft_is_pending() {
   local dir log resp fb out
   dir="$TMP_ROOT/composer-ghost"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -4537,6 +4564,7 @@ test_busy_state_working_maps_to_busy
 test_busy_state_done_and_blocked_map_to_idle
 test_busy_state_unknown_on_no_agent
 test_composer_state_bare_prompt_is_empty
+test_composer_state_claude_rule_bounded_row_probes_identity
 test_composer_state_styled_placeholder_draft_is_pending
 test_composer_state_real_text_is_pending
 test_composer_state_popup_placeholder_fill_is_pending
