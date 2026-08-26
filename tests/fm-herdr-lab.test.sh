@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Behavior tests for bin/fm-herdr-lab.sh using a stateful fake Herdr client.
+# Behavior tests for bin/fm-herdr-lab.sh using a stateful fake Herdr client,
+# plus the shared lab preflight in tests/herdr-test-safety.sh that decides when
+# a native-agent-state guard must skip and when it must fail.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -73,6 +75,8 @@ chmod +x "$FAKEBIN/herdr"
 
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-herdr-lab.sh"
+# shellcheck source=tests/herdr-test-safety.sh
+. "$ROOT/tests/herdr-test-safety.sh"
 
 run_with_fake() {
   PATH="$FAKEBIN:$PATH" \
@@ -234,6 +238,68 @@ SH
   pass "fm-herdr-lab: timed-out provisioning cancels the launch before teardown"
 }
 
+AGENT_REPLIES="$TMP_ROOT/agent-get-replies"
+AGENT_CURSOR="$TMP_ROOT/agent-get-cursor"
+
+# One scripted `agent get` response per poll, the last one repeating, so a case
+# says what the surface answers over a whole readiness window. Herdr answers a
+# result payload on stdout and every failure, agent_not_found included, on
+# stderr with a non-zero exit (measured on herdr 0.7.5), so the fixture answers
+# the same way.
+scripted_agent_get() {
+  local n total line
+  total=$(wc -l < "$AGENT_REPLIES" | tr -d ' ')
+  n=$(($(cat "$AGENT_CURSOR") + 1))
+  [ "$n" -le "$total" ] || n=$total
+  printf '%s\n' "$n" > "$AGENT_CURSOR"
+  line=$(sed -n "${n}p" "$AGENT_REPLIES")
+  case "$line" in
+    *'"result"'*) printf '%s\n' "$line" ;;
+    *) printf '%s\n' "$line" >&2; return 1 ;;
+  esac
+}
+
+agent_verdict() { # <polls> <response...>
+  local polls=$1
+  shift
+  printf '%s\n' "$@" > "$AGENT_REPLIES"
+  printf '0\n' > "$AGENT_CURSOR"
+  FM_HERDR_AGENT_POLL_INTERVAL=0 herdr_await_agent_registration "$polls" scripted_agent_get
+}
+
+test_agent_registration_preflight() {
+  local not_found='{"error":{"code":"agent_not_found","message":"agent target w1:p1 not found"},"id":"cli:agent:get"}'
+  local working='{"id":"cli:agent:get","result":{"agent":{"agent":"claude","agent_status":"working"}}}'
+  local idle='{"id":"cli:agent:get","result":{"agent":{"agent":"claude","agent_status":"idle"}}}'
+  local blocked='{"id":"cli:agent:get","result":{"agent":{"agent":"claude","agent_status":"blocked"}}}'
+  local broken='herdr: could not reach the session socket'
+  local verdict
+
+  verdict=$(agent_verdict 5 "$not_found" "$working" "$idle")
+  [ "$verdict" = ready ] || fail "a harness that registers and settles must be ready, got '$verdict'"
+  verdict=$(agent_verdict 5 "$blocked")
+  [ "$verdict" = ready ] || fail "a registered blocked agent must be ready, got '$verdict'"
+
+  verdict=$(agent_verdict 5 "$not_found")
+  [ "$verdict" = unregistered ] \
+    || fail "a Herdr that only ever answers agent_not_found must be unregistered (the skip), got '$verdict'"
+
+  verdict=$(agent_verdict 5 "$working")
+  [ "$verdict" = stuck ] \
+    || fail "an agent that registers but never becomes ready must be stuck (a real failure), got '$verdict'"
+  verdict=$(agent_verdict 5 "$working" "$not_found")
+  [ "$verdict" = stuck ] \
+    || fail "an environment that registered once must never downgrade to the skip, got '$verdict'"
+
+  verdict=$(agent_verdict 5 "$broken")
+  [ "$verdict" = unreadable ] || fail "an unparseable agent surface must be unreadable, got '$verdict'"
+  verdict=$(agent_verdict 5 "$not_found" "$broken")
+  [ "$verdict" = unreadable ] \
+    || fail "an inconclusive agent surface must never license the skip, got '$verdict'"
+
+  pass "herdr lab preflight: only a Herdr that registers nothing skips; registered-but-broken and unreadable both fail"
+}
+
 test_refuses_unsafe_names
 test_provision_run_and_guarded_teardown
 test_missing_tripwire_blocks_destruction
@@ -241,3 +307,4 @@ test_changed_default_trips_after_teardown
 test_stopped_owned_lab_can_reprovision
 test_failed_delete_retains_tripwire
 test_timed_out_provision_cancels_late_launch
+test_agent_registration_preflight
