@@ -1387,6 +1387,14 @@ FM_COMPOSER_BUSY_QUEUEING_HARNESSES=$(printf '%s\n' 'claude' 'opencode')
 # So the away daemon caps its Enter budget for a listed harness here and leaves
 # it alone for every other, rather than capping every busy pane. Do not add a
 # second conversion path for opencode; the shared queued-Enter verdict covers it.
+#
+# Membership also costs a listed harness the right to CONFIRM a busy delivery.
+# `pending` looks identical whether the Enter queued the line or was swallowed,
+# so no post-submit read can prove it landed, and the shared conversion reports
+# `empty` on a spent budget either way. The daemon therefore types into a listed
+# busy harness but keeps the buffer and leaves the wedge alarm reachable, the same
+# posture it takes for a harness with no verified queueing behavior at all. A
+# duplicate is recoverable; a dropped escalation is not.
 FM_COMPOSER_BUSY_QUEUE_VISIBLE_HARNESSES=$(printf '%s\n' 'opencode')
 
 _fm_composer_harness_listed() {  # <harness> <newline-separated-set>

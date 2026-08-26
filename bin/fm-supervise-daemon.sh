@@ -433,6 +433,9 @@ classify_unknown() {  # <reason>
 # --- stale marker + escalation buffer (stateful, but via explicit state dir) -
 # Marker:   state/.subsuper-stale-<key>   contains the epoch first seen idle.
 # Buffer:   state/.subsuper-escalations    one distilled line per escalation.
+# Typed:    state/.subsuper-inject-typed   hash of the last digest typed into the
+#           pane on a delivery that could not be proven, so an unchanged buffer
+#           is alarmed about rather than retyped once per max-defer window.
 # Seen:     state/.subsuper-seen-status-<task>  last status line the scan
 #           escalated, so the catch-all does not re-fire the same terminal.
 
@@ -661,7 +664,11 @@ escalate_flush() {  # <state> [mode]
   # Single-line wrapper: no embedded newlines (inject_msg also collapses as a
   # safety net, but keeping the source single-line makes the intent explicit).
   msg=$(printf 'Supervisor escalate (%s event(s)): %s (pre-read; re-arm not needed — watcher daemon-managed)' "$n" "$msg")
-  if inject_msg "$msg" "$state" "$mode"; then : > "$buf"; rm -f "${buf}.since" "$state/.subsuper-inject-wedged"; return 0; fi
+  if inject_msg "$msg" "$state" "$mode"; then
+    : > "$buf"
+    rm -f "${buf}.since" "$state/.subsuper-inject-wedged" "$state/.subsuper-inject-typed"
+    return 0
+  fi
   return 1
 }
 
@@ -991,9 +998,10 @@ housekeeping() {  # <state>
   # goes ahead under the unchanged composer guard and verified submit rather than
   # waiting forever. That attempt reports non-zero even when the submit reads
   # empty, so the alarm below always fires and the buffer always survives it; the
-  # marker's own age then throttles the next attempt to one per max-defer window.
-  # Only a genuinely confirmed delivery (idle pane, or a verified queueing
-  # harness) clears the buffer.
+  # marker's own age then throttles the alarm to one per max-defer window, and
+  # inject_msg's typed-digest record stops an unchanged digest being retyped in
+  # every one of those windows. Only a genuinely confirmed delivery (idle pane, or
+  # a busy harness that proves the Enter landed) clears the buffer.
   max_defer=${FM_MAX_DEFER_SECS:-$MAX_DEFER_SECS_DEFAULT}
   if afk_active "$state" && [ "$max_defer" -gt 0 ] && [ -s "$state/.subsuper-escalations" ]; then
     oldest=$(_oldest_line_age "$state/.subsuper-escalations")
@@ -1123,10 +1131,14 @@ window_for_task() {  # <task-key> [state]
 # gone, afk is inactive, the supervisor is busy on a harness not verified to
 # queue input (in `normal` mode it defers; in `max-defer` mode it types the digest
 # anyway but still returns non-zero, because that delivery cannot be proven), the
+# supervisor is busy on a harness that keeps its queued line visible (typed, and
+# equally unprovable, because `pending` looks the same queued or swallowed), the
 # composer is not affirmatively empty, the verified submit cannot be confirmed
 # after bounded retries, or a busy pane whose harness clears its composer on a
 # landed Enter still shows the digest afterwards. On non-zero the caller preserves
 # the buffer so the escalation survives for the next cycle or the catch-up flush.
+# An unprovable attempt is typed at most ONCE per distinct digest: the alarm keeps
+# its cadence while the same content is not retyped every window.
 #
 # Submit model:
 #   - TYPE ONCE, then submit with Enter. Never retype the digest: a swallowed
@@ -1143,9 +1155,10 @@ window_for_task() {  # <task-key> [state]
 #     would merge with the human's text.
 inject_msg() {  # <message> [state] [normal|max-defer]
   local msg=$1 state mode target backend retries sleep_s verdict composer encoded harness
-  local busy='' unproven=''
+  local busy='' unproven='' typed_marker typed_sig
   state="${2:-$(_state_root)}"
   mode="${3:-normal}"
+  typed_marker="$state/.subsuper-inject-typed"
   # (1) Presence-gate: inject ONLY when afk is active. When afk is off, the
   # daemon self-handles and stays quiet; firstmate drives the normal always-on
   # watcher triage. Escalations buffer and survive for the next catch-up flush.
@@ -1173,8 +1186,11 @@ inject_msg() {  # <message> [state] [normal|max-defer]
   #
   #       a) The primary harness is VERIFIED to queue a submitted line as its
   #          next turn (fm_composer_busy_queues_input, bin/fm-composer-lib.sh,
-  #          which owns the set). Deliver immediately, mid-turn, and a confirmed
-  #          submit clears the buffer as usual.
+  #          which owns the set). Deliver immediately, mid-turn. Clearing the
+  #          buffer still needs PROOF, which only a harness that clears its
+  #          composer on a landed Enter can give (step 6); one that keeps the
+  #          queued line visible reads `pending` either way, so it is delivered
+  #          to but never confirmed, exactly like (b).
   #       b) Any other harness waits for an idle window, because queueing is
   #          vendor behavior and cannot be assumed. The wait is BOUNDED:
   #          housekeeping's max-defer escape re-enters with mode=max-defer once
@@ -1201,11 +1217,36 @@ inject_msg() {  # <message> [state] [normal|max-defer]
     busy=1
     if fm_composer_busy_queues_input "$harness"; then
       log "inject into a busy supervisor pane: $harness queues a submitted line as its next turn"
+      # ...but a harness that keeps its queued line VISIBLE
+      # (fm_composer_busy_queue_keeps_text) reads `pending` after Enter whether
+      # the line queued or the Enter was swallowed, and step (6)'s composer
+      # re-confirmation is skipped for exactly that reason. So no post-submit read
+      # can prove this delivery, and the shared retries-exhausted conversion would
+      # otherwise report `empty` on an Enter that never landed and clear the
+      # buffer. Type it, never confirm it.
+      if fm_composer_busy_queue_keeps_text "$harness"; then
+        unproven="a queued line stays visible in $harness's composer, so a post-Enter read cannot tell a queued line from a swallowed one"
+      fi
     elif [ "$mode" = max-defer ]; then
-      unproven=1
+      unproven="$harness has no verified queueing behavior, so an empty composer after Enter cannot tell a queued line from one discarded mid-turn"
       log "inject attempt into a busy supervisor pane past max-defer: $harness has no verified queueing behavior, so the buffer is preserved and the wedge alarm raised whatever the submit reports"
     else
       log "inject deferred: supervisor pane busy (agent mid-turn)"
+      return 1
+    fi
+  fi
+  # (3b) An unprovable attempt never clears the buffer, so without a bound it
+  # would retype the same digest on every flush that reaches here - once per
+  # max-defer window on the escape path, and once per batch tick on a busy
+  # visible-queue harness. Duplicates over loss buys ONE duplicate per genuinely
+  # new digest, not a copy per window across a multi-hour turn. Compare the digest
+  # CONTENT rather than a timestamp: unchanged content still returns non-zero, so
+  # housekeeping keeps alarming on its normal cadence and the stall stays exactly
+  # as visible, while new escalations change the digest and earn a fresh attempt.
+  if [ -n "$unproven" ]; then
+    typed_sig=$(_hash_text "$msg")
+    if [ "$typed_sig" = "$(cat "$typed_marker" 2>/dev/null || true)" ]; then
+      log "inject not retyped: the same digest was already typed into this busy $harness pane and could not be proven delivered; the buffer and the wedge alarm both stand, and a changed digest will be typed again"
       return 1
     fi
   fi
@@ -1235,7 +1276,9 @@ inject_msg() {  # <message> [state] [normal|max-defer]
   # (fm_composer_busy_queue_keeps_text, bin/fm-composer-lib.sh, which owns both
   # per-harness facts). There a post-Enter `pending` is what a successful queue
   # LOOKS like, so every retry is a plausible second queued turn and the captain
-  # would receive one copy of the digest per Enter.
+  # would receive one copy of the digest per Enter. The cap only bounds how many
+  # copies one attempt can queue; it never decides delivery, because that same
+  # ambiguity already made this attempt unproven above.
   # Every other harness keeps its full budget, and claude in particular MUST:
   # claude clears its composer on a landed Enter, so `pending` means the Enter was
   # swallowed and the digest is sitting unsent. The retries are what recover it,
@@ -1250,13 +1293,15 @@ inject_msg() {  # <message> [state] [normal|max-defer]
   fi
   sleep_s=${FM_INJECT_CONFIRM_SLEEP:-$INJECT_CONFIRM_SLEEP_DEFAULT}
   verdict=$(fm_backend_send_text_submit "$backend" "$target" "$msg" "$retries" "$sleep_s" "$sleep_s")
-  # (5) The max-defer attempt into an unverified busy harness is never
-  # buffer-clearing confirmation, however the submit reads. Returning non-zero is
-  # what keeps the buffer in escalate_flush and raises the wedge alarm in
-  # housekeeping, so a stall stays visible and an escalation is never dropped on
-  # an unproven `empty`.
+  # (5) An attempt whose delivery cannot be PROVEN is never buffer-clearing
+  # confirmation, however the submit reads. Returning non-zero is what keeps the
+  # buffer in escalate_flush and raises the wedge alarm in housekeeping, so a
+  # stall stays visible and an escalation is never dropped on an unprovable
+  # verdict. Record what was typed so the next window alarms instead of retyping
+  # the same digest; a genuinely new digest hashes differently and is typed again.
   if [ -n "$unproven" ]; then
-    log "inject unproven: typed the digest once and spent up to $retries Enter(s) on a busy $harness pane past max-defer (verdict=$verdict); an empty composer is not proof an unverified harness queued the line rather than discarding it, so the buffer stays and the wedge alarm fires"
+    printf '%s\n' "$typed_sig" 2>/dev/null > "$typed_marker" || true
+    log "inject unproven: typed the digest once and spent up to $retries Enter(s) on a busy $harness pane (verdict=$verdict); $unproven, so the buffer stays and the wedge alarm fires"
     return 1
   fi
   # (6) Confirm against the COMPOSER on a busy pane whose harness clears it on a

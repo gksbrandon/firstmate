@@ -314,9 +314,12 @@ A Claude pane parked on a permission dialog was measured the same day: `agent ge
 
 `bin/fm-composer-lib.sh` records the harnesses verified to queue.
 OpenCode is the second entry, and it is admitted on the evidence already pinned above rather than on a new measurement: OpenCode 1.18.4 accepts a mid-turn Enter and queues it for after the current turn, which is the exact property this set gates on, and is why both submit cores already carry a queued-Enter exception for it.
-The two entries differ only in what the post-Enter composer shows, which changes how delivery is confirmed and not whether it happens: Claude clears its composer, so the submit reads `empty` directly and returns on the first Enter, while OpenCode keeps the typed text visible until the turn ends, reads `pending` on every pass, and reaches the same confirmation through `fm_composer_queued_enter_verdict` once the retry budget is spent.
+The two entries differ in what the post-Enter composer shows, which changes whether the delivery can be **proven** and not whether it happens: Claude clears its composer, so the submit reads `empty` directly and returns on the first Enter, while OpenCode keeps the typed text visible until the turn ends and reads `pending` on every pass.
 Whether a queued line stays visible is a separate per-harness fact from whether the harness queues, and it decides what a post-Enter `pending` means, so `bin/fm-composer-lib.sh` records the two separately.
 For OpenCode `pending` is what a successfully queued line looks like, so each retry is a plausible second queued turn; away-mode injection therefore sends exactly one Enter into a busy OpenCode pane, and the captain cannot receive the same digest once per retry.
+That visibility cuts both ways: because a swallowed Enter leaves the same `pending` picture, no post-submit read can prove an OpenCode busy delivery landed, and `fm_composer_queued_enter_verdict`'s harness-agnostic conversion would report `empty` on a spent budget either way.
+Away-mode injection therefore never lets a busy visible-queue harness clear the escalation buffer: the digest is typed, the buffer is kept, and the wedge alarm stays reachable, exactly as for a harness with no verified queueing behavior at all.
+A duplicate is recoverable and a dropped escalation is not, which is the same posture the max-defer escape takes below.
 Claude keeps its full budget, and must: it clears its composer on a landed Enter, so `pending` means the Enter was swallowed and the digest is sitting unsent, and the retries are what recover it.
 Claude spends the budget precisely when an Enter was swallowed, which is the case the budget exists for; capping it would convert a single swallow into a false confirmation that cleared the buffer with the text still in the composer.
 An extra Enter on an already-cleared Claude composer is a documented no-op rather than a duplicate delivery, so the full budget carries no duplicate risk.
@@ -325,6 +328,7 @@ Away-mode injection therefore re-reads the composer after the submit on a busy p
 Both are scoped to `inject_msg`; `INJECT_CONFIRM_RETRIES_DEFAULT`, `fm_composer_queued_enter_verdict`, and the shared submit cores' retry contract are unchanged.
 An unlisted harness is not assumed to queue and waits for an idle window instead, but that wait is bounded: `bin/fm-supervise-daemon.sh`'s max-defer escape types the digest anyway once the buffer passes `FM_MAX_DEFER_SECS`, under the same composer guard and verified submit.
 That attempt is never treated as confirmation, since an empty composer on an unmeasured harness cannot distinguish a queued line from a discarded one, so the buffer survives and the wedge alarm fires regardless of the verdict.
+Every unprovable attempt is typed at most once per distinct digest: `state/.subsuper-inject-typed` holds a hash of what was last typed, so a turn that runs for hours alarms on its normal cadence without re-typing the same digest into the pane in every max-defer window, while a genuinely new escalation changes the digest and earns a fresh attempt.
 No primary is therefore silently starved, and none is silently dropped.
 Refresh the live proof with:
 

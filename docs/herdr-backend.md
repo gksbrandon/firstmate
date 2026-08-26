@@ -256,6 +256,8 @@ A Firstmate primary can hold a single turn for hours, so refusing every busy pan
 Claude is verified there, so an escalation typed into its empty composer during a turn is answered when that turn ends rather than lost.
 An unlisted harness waits for an idle window rather than borrowing that proof, and the daemon's max-defer escape ends that wait with a delivery attempt instead of an indefinite stall.
 That attempt never clears the escalation buffer and always raises the wedge alarm, because an empty composer on an unmeasured harness is not proof the line was queued rather than discarded.
+The same holds for a listed harness that keeps its queued line visible in the composer: `pending` reads identically whether the Enter queued or was swallowed, so that delivery is attempted but never confirmed either.
+Any such unprovable attempt is typed at most once per distinct digest, so a long turn keeps alarming without retyping the same escalation into the pane.
 `bin/fm-test-run.sh` runs the opt-in live guard that refreshes this claim.
 
 The current operational envelope starts with U+2063 and `FIRSTMATE_OP: `.

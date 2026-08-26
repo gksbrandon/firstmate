@@ -737,6 +737,27 @@ test_claude_on_herdr_idle_screen_with_live_identity() {
   pass "fm_composer_classify_screen: the live claude-on-herdr composer reads empty, while typed text, a dead shell, and unprovable ghost text defer"
 }
 
+# Visibility is only ever consulted INSIDE the queueing branch of the away
+# daemon's busy guard (bin/fm-supervise-daemon.sh), because a harness that does
+# not queue is deferred or attempted-and-never-confirmed before visibility
+# matters. A harness listed as keeping its queued text visible without also being
+# a verified queueing harness would therefore never reach the rule that stops an
+# unprovable `empty` from clearing the escalation buffer.
+test_visible_queue_harnesses_are_all_queueing_harnesses() {
+  local harness seen=0
+  while IFS= read -r harness; do
+    [ -n "$harness" ] || continue
+    seen=$((seen + 1))
+    fm_composer_busy_queues_input "$harness" \
+      || fail "'$harness' keeps its queued text visible but is not a verified queueing harness, so away-mode injection would skip its never-confirm rule"
+  done <<EOF
+$FM_COMPOSER_BUSY_QUEUE_VISIBLE_HARNESSES
+EOF
+  [ "$seen" -gt 0 ] || fail "the visible-queue set is empty, so this invariant proved nothing"
+  pass "fm_composer_busy_queue_keeps_text: every visible-queue harness is also a verified queueing harness"
+}
+
 test_busy_queues_input_is_verified_per_harness
 test_busy_queue_visibility_is_separate_from_queueing
+test_visible_queue_harnesses_are_all_queueing_harnesses
 test_claude_on_herdr_idle_screen_with_live_identity

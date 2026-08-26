@@ -119,11 +119,16 @@ print_blockers() {  # <file>
   done < "$file"
 }
 
+# The same session-scoped set as bin/fm-afk-start.sh's FM_AFK_DELIVERY_ARTIFACTS,
+# spelled out rather than sourced: sourcing that file would source fm-wake-lib.sh,
+# whose initialization creates the state directory, and the `guard` mode below
+# advertises a literal read-only refusal.
 clear_delivery_artifacts() {
   rm -f \
     "$STATE/.subsuper-escalations" \
     "$STATE/.subsuper-escalations.since" \
-    "$STATE/.subsuper-inject-wedged"
+    "$STATE/.subsuper-inject-wedged" \
+    "$STATE/.subsuper-inject-typed"
 }
 
 return_guard() {

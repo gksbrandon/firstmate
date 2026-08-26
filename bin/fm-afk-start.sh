@@ -46,6 +46,20 @@ fm_afk_start_usage() {
   sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
+# FM_AFK_DELIVERY_ARTIFACTS is the ONE list of session-scoped delivery artifacts,
+# consumed by the clear below and by every snapshot/rollback in
+# bin/fm-afk-launch.sh, so adding one (here, the typed-digest record that bounds
+# how often an unprovable delivery retypes the same digest) cannot be forgotten in
+# one site and leak stale state into the next session. bin/fm-afk-return.sh keeps
+# its own copy because sourcing this file would create the state directory and
+# break its read-only `guard` mode.
+FM_AFK_DELIVERY_ARTIFACTS=(
+  .subsuper-escalations
+  .subsuper-escalations.since
+  .subsuper-inject-wedged
+  .subsuper-inject-typed
+)
+
 # fm_afk_clear_stale_artifacts: on a FRESH away-session entry (the daemon is not
 # already running), drop the previous away session's leftover escalation-delivery
 # artifacts so they cannot surface as stale escalations under the new session.
@@ -60,10 +74,11 @@ fm_afk_start_usage() {
 # NOT called on a refresh (daemon already alive), so the current session's own
 # buffered escalations are preserved.
 fm_afk_clear_stale_artifacts() {  # <state-dir>
-  local state=$1
-  rm -f "$state/.subsuper-escalations" \
-        "$state/.subsuper-escalations.since" \
-        "$state/.subsuper-inject-wedged" 2>/dev/null
+  local state=$1 artifact result=0
+  for artifact in "${FM_AFK_DELIVERY_ARTIFACTS[@]}"; do
+    rm -f "$state/$artifact" 2>/dev/null || result=1
+  done
+  return "$result"
 }
 
 daemon_lock_owner() {
