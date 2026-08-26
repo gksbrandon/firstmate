@@ -251,8 +251,11 @@ bin/fm-test-run.sh tests/fm-project-origin.test.sh
 bin/fm-test-run.sh tests/fm-remote-reply.test.sh
 bin/fm-test-run.sh tests/fm-remote-backlog-handoff.test.sh
 bin/fm-test-run.sh tests/fm-remote-secondmate-lifecycle-e2e.test.sh
+bin/fm-test-run.sh tests/fm-remote-secondmate-profile-axes.test.sh
 bin/fm-test-run.sh tests/fm-remote-secondmate-trace-context.test.sh
 ```
+
+`tests/fm-remote-secondmate-profile-axes.test.sh` owns the launch-profile axes on this route: the harness, model, and effort a `config/secondmate-harness` line pins are validated by the parent, replayed across the SSH boundary by `bin/fm-remote-secondmate-control.sh`, and applied by the remote host's own `bin/fm-spawn.sh`, so the launch literal the remote pane receives is what the suite reads back.
 
 The account-level checks the doctor performs - a real Aqua login session, a real `launchctl` domain, and a real herdr server - are only ever exercised against fixtures here, so the readiness gate's behavior on a genuine Mac remains an operator-run smoke test.
 

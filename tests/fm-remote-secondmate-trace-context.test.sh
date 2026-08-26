@@ -120,7 +120,7 @@ exec "$FM_FAKE_REMOTE_ENTRYPOINT" "$@"
 SH
 chmod +x "$FAKEBIN/fake-ssh"
 
-printf 'codex gpt-5.6-sol ultra\n' > "$PARENT/config/secondmate-harness"
+printf 'codex\n' > "$PARENT/config/secondmate-harness"
 printf 'tmux\n' > "$PARENT/config/backend"
 printf 'codex\n' > "$PARENT/config/crew-harness"
 printf '## In flight\n\n## Queued\n\n## Done\n' > "$PARENT/data/backlog.md"
@@ -169,12 +169,6 @@ freeze_parent_session
 remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate >/dev/null 2>&1 \
   || fail "default-off remote secondmate spawn failed"
 assert_present "$PARENT/state/ios.meta" "default-off remote spawn published no parent metadata"
-assert_grep 'model=gpt-5.6-sol' "$PARENT/state/ios.meta" \
-  "remote codex ultra spawn did not retain its model"
-assert_grep 'effort=ultra' "$PARENT/state/ios.meta" \
-  "remote codex ultra spawn did not retain its effort"
-assert_contains "$(cat "$HERDR_LOG")" 'model_reasoning_effort="ultra"' \
-  "remote codex ultra spawn did not emit model_reasoning_effort"
 ! grep -q '^traceparent=' "$PARENT/state/ios.meta" \
   || fail "default-off remote spawn must not record a traceparent= line"
 ! grep -q 'export TRACEPARENT=' "$HERDR_LOG" \

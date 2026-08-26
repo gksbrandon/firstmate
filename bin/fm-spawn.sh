@@ -1394,8 +1394,10 @@ effort_flag_for_harness() {
       ;;
     codex)
       # codex-cli 0.149.1's schema accepts model_reasoning_effort values
-      # low|medium|high|xhigh|ultra. ultra is exclusive to gpt-5.6-sol. Omit
-      # max rather than passing an unsupported value.
+      # low|medium|high|xhigh|ultra. ultra is exclusive to gpt-5.6-sol, and the
+      # currently nix-pinned PATH codex 0.133.0 rejects it outright until its
+      # separately owned cutover. Omit max rather than passing an unsupported
+      # value.
       case "$effort" in
         low|medium|high|xhigh|ultra) printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"$effort\"")" ;;
       esac
