@@ -658,6 +658,48 @@ test_secondmate_relaunch_picks_up_the_configured_harness_pin() {
   pass "fm-control relaunch: a secondmate relaunch re-resolves its durable configured harness pin"
 }
 
+# relaunch resolves config/secondmate-harness through its OWN effort validation,
+# not fm-spawn's, so the Codex-only ultra tier needs proving on this path too.
+test_secondmate_relaunch_picks_up_a_configured_ultra_pin() {
+  local dir home out rc launch
+  dir=$(new_case smultra sm3b)
+  home="$dir/home"
+  mkdir -p "$home/config" "$home/data/sm3b"
+  printf 'codex gpt-5.6-sol ultra\n' > "$home/config/secondmate-harness"
+  printf '# secondmate brief\n' > "$home/data/sm3b/brief.md"
+  fm_git_worktree "$dir/proj" "$dir/smhome" sm-branch
+  mkdir -p "$dir/smhome/state" "$dir/smhome/data" "$dir/smhome/bin"
+  printf 'sm3b\n' > "$dir/smhome/.fm-secondmate-home"
+  printf '# agents\n' > "$dir/smhome/AGENTS.md"
+  {
+    echo "window=fmses:fm-sm3b"
+    echo "endpoint_task_id=sm3b"
+    echo "worktree=$dir/smhome"
+    echo "project=$dir/smhome"
+    echo "harness=claude"
+    echo "kind=secondmate"
+    echo "mode=secondmate"
+    echo "yolo=off"
+    echo "model=default"
+    echo "effort=default"
+    echo "home=$dir/smhome"
+  } > "$home/state/sm3b.meta"
+  printf '%s\n' "fm-sm3b" > "$dir/fake/windows"
+  printf '%s' "$dir/smhome" > "$dir/fake/cwd"
+  printf 'codex' > "$dir/fake/becomes"
+  out=$(run_control "$dir" sm3b relaunch); rc=$?
+  expect_code 0 "$rc" "a configured codex+ultra pin should relaunch"$'\n'"$out"
+  assert_not_contains "$out" "effort token 'ultra'" \
+    "relaunch must not reject the configured ultra tier as an unknown token"
+  [ "$(journal_field "$dir" sm3b to_effort)" = ultra ] \
+    || fail "the configured ultra tier should come with the pin, got '$(journal_field "$dir" sm3b to_effort)'"
+  [ "$(meta_field "$dir" sm3b effort)" = ultra ] || fail "the durable record should retain ultra"
+  launch=$(cat "$dir/fake/literal")
+  assert_contains "$launch" "-c 'model_reasoning_effort=\"ultra\"'" \
+    "the replacement secondmate launch did not carry the configured ultra tier"
+  pass "fm-control relaunch: a configured codex ultra pin reaches the replacement secondmate launch"
+}
+
 test_secondmate_relaunch_ignores_invalid_configured_effort_before_stop() {
   local dir home out rc
   dir=$(new_case invalid-effort sm6)
@@ -1346,6 +1388,7 @@ test_prior_harness_turnend_registry_entry_is_cleared
 test_wiring_removal_failure_refuses_before_replacement_arm
 test_turnend_auth_paths_are_owned_by_the_control_adapter
 test_secondmate_relaunch_picks_up_the_configured_harness_pin
+test_secondmate_relaunch_picks_up_a_configured_ultra_pin
 test_secondmate_relaunch_ignores_invalid_configured_effort_before_stop
 test_secondmate_relaunch_onto_a_crewmate_only_adapter_refuses_before_stop
 test_explicit_secondmate_harness_ignores_configured_profile_axes

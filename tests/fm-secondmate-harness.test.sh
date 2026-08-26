@@ -794,6 +794,50 @@ test_spawn_secondmate_harness_model_and_effort_tokens() {
   pass "C4 spawn: config/secondmate-harness's model+effort tokens thread into the launch and meta"
 }
 
+# The Codex-only `ultra` tier is reachable from this durable pin, and a pin on a
+# harness that has no such level records the request without handing a CLI a
+# value it rejects. This route resolves the token separately from the remote one
+# (tests/fm-remote-secondmate-profile-axes.test.sh owns that), so both need it.
+test_spawn_secondmate_harness_ultra_token() {
+  local w sm meta launchlog launch out status
+  w="$TMP_ROOT/spawn-ultra-token"
+  sm="$w/sm"
+  launchlog="$w/launch.log"
+  mkdir -p "$w/home/config"
+  printf 'codex gpt-5.6-sol ultra\n' > "$w/home/config/secondmate-harness"
+  make_seeded_home "$sm" sm
+
+  out=$(spawn_secondmate_capture "$w" sm "$sm" "$launchlog" 2>&1); status=$?
+  expect_code 0 "$status" "a configured codex+ultra secondmate pin should spawn"$'\n'"$out"
+  assert_not_contains "$out" "effort token 'ultra'" \
+    "ultra-token: ultra must not be rejected as an unknown effort token"
+  meta="$w/home/state/sm.meta"
+  [ "$(meta_field "$meta" effort)" = ultra ] \
+    || fail "ultra-token: meta effort not ultra (got '$(meta_field "$meta" effort)')"
+  launch=$(cat "$launchlog")
+  assert_contains "$launch" "codex --model 'gpt-5.6-sol' -c 'model_reasoning_effort=\"ultra\"'" \
+    "ultra-token: launch did not thread the configured ultra tier"
+
+  w="$TMP_ROOT/spawn-ultra-token-non-codex"
+  sm="$w/sm"
+  launchlog="$w/launch.log"
+  mkdir -p "$w/home/config"
+  printf 'claude opus ultra\n' > "$w/home/config/secondmate-harness"
+  make_seeded_home "$sm" sm
+
+  out=$(spawn_secondmate_capture "$w" sm "$sm" "$launchlog" 2>&1); status=$?
+  expect_code 0 "$status" "a configured claude+ultra secondmate pin should spawn"$'\n'"$out"
+  meta="$w/home/state/sm.meta"
+  [ "$(meta_field "$meta" effort)" = ultra ] \
+    || fail "ultra-token: a non-codex pin dropped ultra instead of recording it"
+  launch=$(cat "$launchlog")
+  assert_contains "$launch" "--model 'opus'" \
+    "ultra-token: a non-codex pin dropped the model alongside the omitted effort"
+  assert_not_contains "$launch" "--effort" \
+    "ultra-token: the Codex-only ultra reached a launch that rejects it"
+  pass "C4b spawn: config/secondmate-harness pins the Codex-only ultra tier, and a non-codex pin records it without launching it"
+}
+
 # Precedence: an explicit per-spawn --model overrides the file's model token.
 test_spawn_explicit_model_overrides_secondmate_harness_token() {
   local w sm meta launchlog launch
@@ -2564,6 +2608,7 @@ test_spawn_explicit_backend_precedence_over_env_and_inherited_config
 test_spawn_bare_harness_no_model_effort_flag
 test_spawn_secondmate_harness_model_token
 test_spawn_secondmate_harness_model_and_effort_tokens
+test_spawn_secondmate_harness_ultra_token
 test_spawn_explicit_model_overrides_secondmate_harness_token
 test_spawn_explicit_effort_overrides_secondmate_harness_token
 test_spawn_explicit_harness_does_not_inherit_secondmate_harness_tokens
