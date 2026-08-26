@@ -1412,8 +1412,9 @@ effort_flag_for_harness() {
       esac
       ;;
     pi|pi-signed)
-      # Pi 0.80.6 accepts the full shared effort vocabulary, including max, through
-      # its --thinking flag.
+      # Pi 0.80.6 accepts low through max through its --thinking flag. Pi has no
+      # ultra concept and its ladder ends at max, so the Codex-only ultra is
+      # omitted rather than passed to a flag that rejects it.
       case "$effort" in
         low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
       esac
