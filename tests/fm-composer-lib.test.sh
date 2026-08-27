@@ -664,3 +664,100 @@ test_queued_enter_verdict_does_not_convert_other_states() {
 test_queued_enter_verdict_busy_pending_is_empty
 test_queued_enter_verdict_idle_pending_stays_pending
 test_queued_enter_verdict_does_not_convert_other_states
+
+# --- away-mode injection into a busy pane (task fm-afk-inject-wedge) ---------
+#
+# The away daemon used to refuse every busy supervisor pane outright, and a
+# firstmate primary that is continuously mid-turn never presents an idle sample
+# to win that guard: on 2026-08-26 every escalation buffered for 71 minutes.
+# The escape is a per-harness VERIFIED fact, not a relaxation, so the shapes
+# below still have to defer on their own merits.
+
+test_busy_queues_input_is_verified_per_harness() {
+  local harness
+  fm_composer_busy_queues_input claude \
+    || fail "claude is verified to queue a submitted line while a turn runs"
+  # opencode 1.18.4 accepts a mid-turn Enter and queues it for after the current
+  # turn, the exact property this set gates on; it is why both submit cores
+  # already carry a queued-Enter exception for it. It keeps the typed text
+  # visible while queued, so its confirmation runs through
+  # fm_composer_queued_enter_verdict rather than a cleared composer.
+  fm_composer_busy_queues_input opencode \
+    || fail "opencode 1.18.4 is verified to queue a mid-turn Enter for after the current turn"
+  for harness in codex pi pi-signed grok kimi cursor muse unknown ''; do
+    if fm_composer_busy_queues_input "$harness"; then
+      fail "'${harness:-<empty>}' has no live proof that it queues a mid-turn submit and must not borrow another harness's"
+    fi
+  done
+  pass "fm_composer_busy_queues_input: claude and opencode queue on their own live proof; every unproven and the empty harness does not"
+}
+
+# Queueing and keeping the queued text VISIBLE are two different per-harness
+# facts, and conflating them is what would let a busy claude injection be capped
+# to a single Enter. On claude a post-Enter `pending` is a SWALLOW, so its retry
+# budget is the only recovery; on opencode the same read is the queue itself, so
+# a retry would queue a second copy.
+test_busy_queue_visibility_is_separate_from_queueing() {
+  local harness
+  fm_composer_busy_queue_keeps_text opencode \
+    || fail "opencode 1.18.4 keeps the typed text visible until the running turn ends"
+  fm_composer_busy_queues_input claude \
+    || fail "claude must still be a queueing harness"
+  if fm_composer_busy_queue_keeps_text claude; then
+    fail "claude clears its composer on a landed Enter, so treating its pending read as a visible queue would confirm a swallow"
+  fi
+  for harness in codex pi pi-signed grok kimi cursor muse unknown ''; do
+    if fm_composer_busy_queue_keeps_text "$harness"; then
+      fail "'${harness:-<empty>}' has no recorded queued-text-stays-visible behavior"
+    fi
+  done
+  pass "fm_composer_busy_queue_keeps_text: only opencode; claude queues without keeping its text, so the two sets stay distinct"
+}
+
+# The live claude-on-herdr idle screen, captured from Claude Code 2.1.x on Herdr
+# 0.7.5 (2026-08-26): a bare `❯` between two solid `─` rules. That separator
+# pair is structurally pi's separated shape, so herdr's `agent get` reporting
+# claude - not pi - is what routes the screen back to the bare-glyph reading.
+# The daemon injects only on `empty`, so this branch is what every away-mode
+# escalation depends on.
+test_claude_on_herdr_idle_screen_with_live_identity() {
+  local idle typed shell unstyled
+  idle=$'  Update available\n────────────────────────\n❯\n────────────────────────\n  Opus 5 | ctx: 4% used\n  bypass permissions on'
+  assert_screen "claude idle, herdr reports working" empty "$CAPS_STYLED" "$idle" '' "$(printf 'claude\tworking')"
+  assert_screen "claude idle, herdr reports idle" empty "$CAPS_STYLED" "$idle" '' "$(printf 'claude\tidle')"
+
+  typed=${idle/$'❯\n'/$'❯ half typed escalation\n'}
+  assert_screen "half-typed claude composer" pending "$CAPS_STYLED" "$typed" '' "$(printf 'claude\tidle')"
+
+  shell=${idle/$'❯\n'/$'$\n'}
+  assert_screen "dead shell between the rules" unknown "$CAPS_STYLED" "$shell" '' "$(printf 'claude\tidle')"
+
+  unstyled=${idle/$'❯\n'/$'❯ a rotating idle suggestion\n'}
+  assert_screen "unreadable ghost text without styling" unknown "$CAPS_PLAIN" "$unstyled"
+  pass "fm_composer_classify_screen: the live claude-on-herdr composer reads empty, while typed text, a dead shell, and unprovable ghost text defer"
+}
+
+# Visibility is only ever consulted INSIDE the queueing branch of the away
+# daemon's busy guard (bin/fm-supervise-daemon.sh), because a harness that does
+# not queue is deferred or attempted-and-never-confirmed before visibility
+# matters. A harness listed as keeping its queued text visible without also being
+# a verified queueing harness would therefore never reach the rule that stops an
+# unprovable `empty` from clearing the escalation buffer.
+test_visible_queue_harnesses_are_all_queueing_harnesses() {
+  local harness seen=0
+  while IFS= read -r harness; do
+    [ -n "$harness" ] || continue
+    seen=$((seen + 1))
+    fm_composer_busy_queues_input "$harness" \
+      || fail "'$harness' keeps its queued text visible but is not a verified queueing harness, so away-mode injection would skip its never-confirm rule"
+  done <<EOF
+$FM_COMPOSER_BUSY_QUEUE_VISIBLE_HARNESSES
+EOF
+  [ "$seen" -gt 0 ] || fail "the visible-queue set is empty, so this invariant proved nothing"
+  pass "fm_composer_busy_queue_keeps_text: every visible-queue harness is also a verified queueing harness"
+}
+
+test_busy_queues_input_is_verified_per_harness
+test_busy_queue_visibility_is_separate_from_queueing
+test_visible_queue_harnesses_are_all_queueing_harnesses
+test_claude_on_herdr_idle_screen_with_live_identity

@@ -1824,11 +1824,621 @@ test_inject_msg_herdr_busy_guard_defers() {
     pane_is_busy() { return 0; }
     fm_backend_composer_state() { fail "composer_state should not be consulted once the busy-guard already deferred"; }
     fm_backend_send_text_submit() { fail "send_text_submit should not run when the busy-guard defers"; }
-    if FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" inject_msg "hello" "$state"; then
-      fail "inject_msg should defer (return non-zero) when the herdr supervisor pane is busy"
+    if FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      inject_msg "hello" "$state"; then
+      fail "inject_msg should defer (return non-zero) when a non-queueing primary's supervisor pane is busy"
     fi
   ) || fail "herdr busy-guard inject_msg subshell failed"
-  pass "inject_msg: herdr busy-guard defers before ever attempting a submit"
+  pass "inject_msg: a busy pane on a harness with no verified queueing behavior defers before any submit"
+}
+
+# The 2026-08-26 wedge: a firstmate primary that is continuously mid-turn never
+# presents an idle sample, so an absolute busy refusal buffered every escalation
+# for 71 minutes. Claude queues a submitted line as its next turn, so injecting
+# is delivery rather than corruption - proven live in
+# tests/fm-herdr-busy-inject-live-e2e.test.sh.
+test_inject_msg_busy_pane_delivers_for_a_queueing_harness() {
+  local dir state
+  dir=$(make_supercase inject-busy-queueing)
+  state="$dir/state"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    pane_is_busy() { return 0; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() {
+      case "$3" in *"hello"*) : ;; *) fail "digest text missing from send_text_submit: $3" ;; esac
+      printf 'empty'
+    }
+    FM_DAEMON_PRIMARY_HARNESS=claude FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      inject_msg "hello" "$state" \
+      || fail "inject_msg should deliver into a busy claude pane whose composer is affirmatively empty"
+  ) || fail "busy queueing-harness inject_msg subshell failed"
+  pass "inject_msg: a busy claude primary still receives the escalation, queued as its next turn"
+}
+
+# The busy escape must not become a composer escape: everything the composer
+# guard already refuses still refuses on a busy pane.
+test_inject_msg_busy_pane_still_honors_the_composer_guard() {
+  local dir state verdict
+  dir=$(make_supercase inject-busy-composer-guard)
+  state="$dir/state"
+  afk_enter "$state"
+  for verdict in pending pending-unproven unknown; do
+    (
+      fm_backend_target_exists() { return 0; }
+      pane_is_busy() { return 0; }
+      eval "fm_backend_composer_state() { printf '%s' '$verdict'; }"
+      fm_backend_send_text_submit() { fail "send_text_submit must not run when the composer reads $verdict"; }
+      if FM_DAEMON_PRIMARY_HARNESS=claude FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+        inject_msg "hello" "$state"; then
+        fail "inject_msg must still defer on a busy pane whose composer reads $verdict"
+      fi
+    ) || fail "busy composer-guard inject_msg subshell failed for $verdict"
+  done
+  pass "inject_msg: half-typed, ambiguous, and unreadable composers still defer on a busy queueing primary"
+}
+
+# A busy pane on an UNVERIFIED harness is a wait, not a refusal. tmux exposes no
+# native busy state, so on the terminal-backed launcher path the rendered
+# signature is the whole busy verdict for codex, kimi, and cursor: without a
+# bounded wait, handing the daemon the captain's real harness would trade
+# claude's wedge for theirs. housekeeping's max-defer escape is what bounds it.
+#
+# But an unmeasured harness may discard mid-turn input and redraw an empty
+# composer, which is indistinguishable from having queued the line. So the
+# attempt happens and is NEVER counted as confirmation: strict-preserve, a
+# duplicate over a loss, and the stall stays visible. The fake submit below
+# reports the most dangerous verdict, `empty`, precisely because that is the one
+# that would otherwise truncate the buffer and drop a captain escalation.
+test_max_defer_attempts_but_never_confirms_a_busy_unverified_harness() {
+  local dir state sent
+  dir=$(make_supercase maxdefer-busy-unverified)
+  state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
+  escalate_add "$state" "needs-decision: pick A"
+  echo $(( $(date +%s) - 600 )) > "$state/.subsuper-escalations.since"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    pane_is_busy() { return 0; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+    FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="fakepane" \
+      FM_ESCALATE_BATCH_SECS=99999 FM_MAX_DEFER_SECS=60 housekeeping "$state"
+  ) || fail "max-defer busy-unverified housekeeping subshell failed"
+  grep -F 'pick A' "$sent" >/dev/null \
+    || fail "max-defer never attempted delivery into a busy pane on a harness with no verified queueing behavior"
+  grep -F 'pick A' "$state/.subsuper-escalations" >/dev/null \
+    || fail "an unproven max-defer submit reporting empty cleared the buffer, silently losing the escalation"
+  [ -s "$state/.subsuper-inject-wedged" ] \
+    || fail "an unproven max-defer delivery did not raise the wedge alarm, so the stall is invisible"
+  grep -F 'pick A' "$state/.subsuper-inject-wedged" >/dev/null \
+    || fail "the wedge marker does not carry the still-undelivered escalation"
+  pass "max-defer: a busy unverified harness is attempted, never confirmed; buffer survives an 'empty' verdict and the alarm fires"
+}
+
+# Whether a queued line stays VISIBLE decides what a post-Enter `pending` means,
+# and therefore who may be capped to one Enter. opencode keeps its text visible,
+# so pending IS the queue and a retry would queue a second copy. claude clears
+# its composer, so pending is a SWALLOW and the retries are the only recovery;
+# capping claude would convert one swallow into a false confirmation.
+test_inject_msg_caps_enters_only_where_a_queue_stays_visible() {
+  local dir state seen
+  dir=$(make_supercase inject-busy-one-enter)
+  state="$dir/state"; seen="$dir/retries.log"; : > "$seen"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf '%s\n' "$4" >> "$seen"; printf 'empty'; }
+    pane_is_busy() { return 0; }
+    if FM_DAEMON_PRIMARY_HARNESS=opencode FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      FM_INJECT_CONFIRM_RETRIES=3 inject_msg "busy opencode digest" "$state"; then
+      fail "a busy opencode injection reported delivery; a composer that keeps its queued line visible cannot prove the Enter landed"
+    fi
+    FM_DAEMON_PRIMARY_HARNESS=claude FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      FM_INJECT_CONFIRM_RETRIES=3 inject_msg "busy claude digest" "$state" \
+      || fail "inject_msg should deliver into a busy claude pane whose composer is affirmatively empty"
+    pane_is_busy() { return 1; }
+    FM_DAEMON_PRIMARY_HARNESS=opencode FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      FM_INJECT_CONFIRM_RETRIES=3 inject_msg "idle digest" "$state" \
+      || fail "inject_msg should deliver into an idle opencode pane"
+  ) || fail "busy-pane retry-budget inject_msg subshell failed"
+  [ "$(sed -n 1p "$seen")" = 1 ] \
+    || fail "a busy opencode injection was given a retry budget of $(sed -n 1p "$seen"), so the digest could be Enter'd more than once into a composer that keeps a queued line visible"
+  [ "$(sed -n 2p "$seen")" = 3 ] \
+    || fail "a busy claude injection was capped to $(sed -n 2p "$seen") Enter(s); claude clears its composer, so a swallowed Enter has no recovery without its full budget"
+  [ "$(sed -n 3p "$seen")" = 3 ] \
+    || fail "the idle path's configured retry budget was changed to $(sed -n 3p "$seen"); the cap must be scoped to a busy pane on a visible-queue harness"
+  pass "inject_msg: one Enter for a busy visible-queue harness, full budget for busy claude and every idle pane"
+}
+
+# A busy pane on a harness that KEEPS its queued line visible, driven end to end
+# through escalate_flush. The stub models that measured contract: the digest is
+# typed once, the single Enter is spent, and the composer still shows the text -
+# which is what a successful queue and a swallowed Enter look like alike. That
+# proven pending on a busy pane is handed to the real shared policy
+# fm_composer_queued_enter_verdict, which converts it to `empty`.
+#
+# That conversion is harness-agnostic by design and CANNOT tell the two apart
+# here, and the composer re-confirmation that saves claude is deliberately
+# skipped for a visible-queue harness. Treating the verdict as delivery would
+# therefore truncate .subsuper-escalations, remove .subsuper-inject-wedged, and
+# leave the digest sitting unsubmitted with no alarm.
+_install_visible_queue_pane() {  # <dir>
+  export FM_FAKE_PANE_TEXT="$1/pane-text" FM_FAKE_ENTERS="$1/enters"
+  fm_backend_target_exists() { return 0; }
+  pane_is_busy() { return 0; }
+  fm_backend_composer_state() {
+    if [ -s "$FM_FAKE_PANE_TEXT" ]; then printf 'pending'; else printf 'empty'; fi
+  }
+  fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> ...
+    printf '%s' "$3" > "$FM_FAKE_PANE_TEXT"
+    printf '%s\n' "$4" > "$FM_FAKE_ENTERS"
+    fm_composer_queued_enter_verdict pending busy
+  }
+}
+
+test_busy_visible_queue_harness_is_typed_but_never_confirmed() {
+  local dir state status=0
+  dir=$(make_supercase busy-visible-queue)
+  state="$dir/state"
+  escalate_add "$state" "needs-decision: pick E"
+  afk_enter "$state"
+  (
+    _install_visible_queue_pane "$dir"
+    FM_DAEMON_PRIMARY_HARNESS=opencode FM_SUPERVISOR_BACKEND=herdr \
+      FM_SUPERVISOR_TARGET="default:w1:p2" FM_INJECT_CONFIRM_RETRIES=3 \
+      escalate_flush "$state"
+  ) || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a busy visible-queue pane reported delivery, so the buffer was cleared on a verdict that cannot tell a queued Enter from a swallowed one"
+  grep -F 'pick E' "$state/.subsuper-escalations" >/dev/null \
+    || fail "the escalation was dropped on a busy delivery nothing could prove"
+  grep -F 'pick E' "$dir/pane-text" >/dev/null \
+    || fail "the digest was never typed into the busy pane, so a queueing primary got nothing"
+  [ "$(cat "$dir/enters")" -eq 1 ] \
+    || fail "the one-Enter cap for a visible-queue harness was lost (budget $(cat "$dir/enters")), so the captain could receive one copy per Enter"
+  pass "inject_msg: a busy visible-queue primary is typed into once, never confirmed, and the escalation survives"
+}
+
+# The other direction: refusing to CONFIRM a busy visible-queue delivery must not
+# make that harness undeliverable. Once its turn ends the composer clears, the
+# submit reads a real `empty`, and the buffer is cleared exactly as before.
+test_idle_visible_queue_harness_still_confirms_and_clears() {
+  local dir state
+  dir=$(make_supercase idle-visible-queue)
+  state="$dir/state"
+  escalate_add "$state" "needs-decision: pick H"
+  afk_enter "$state"
+  (
+    _install_visible_queue_pane "$dir"
+    pane_is_busy() { return 1; }
+    fm_backend_send_text_submit() { printf '%s' "$3" > "$FM_FAKE_PANE_TEXT"; printf 'empty'; }
+    FM_DAEMON_PRIMARY_HARNESS=opencode FM_SUPERVISOR_BACKEND=herdr \
+      FM_SUPERVISOR_TARGET="default:w1:p2" escalate_flush "$state" \
+      || fail "an idle opencode pane whose submit read empty was not treated as delivered"
+  ) || fail "idle visible-queue escalate_flush subshell failed"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a proven idle delivery did not clear the buffer, so every escalation would be sent twice"
+  pass "escalate_flush: an idle visible-queue primary still confirms and clears the buffer"
+}
+
+# An attempt that can never be confirmed also never clears the buffer, so without
+# a bound it retypes in every max-defer window - roughly 96 times across an
+# 8-hour turn, not the ONE copy the duplicates-over-loss tradeoff buys. The bound
+# is per ITEM: an item already typed into the pane alarms on the same cadence
+# without being sent again, and a genuinely new escalation earns a fresh attempt.
+test_max_defer_alarms_without_retyping_already_typed_items() {
+  local dir state sent typed
+  dir=$(make_supercase maxdefer-retype-bound)
+  state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
+  typed="$state/.subsuper-inject-typed"
+  escalate_add "$state" "needs-decision: pick F"
+  echo $(( $(date +%s) - 600 )) > "$state/.subsuper-escalations.since"
+  afk_enter "$state"
+  _run_maxdefer_window() {
+    (
+      fm_backend_target_exists() { return 0; }
+      pane_is_busy() { return 0; }
+      fm_backend_composer_state() { printf 'empty'; }
+      fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+      FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="fakepane" \
+        FM_ESCALATE_BATCH_SECS=99999 FM_MAX_DEFER_SECS=60 housekeeping "$state"
+    ) || fail "max-defer housekeeping window failed"
+  }
+
+  _run_maxdefer_window
+  [ "$(grep -c 'Supervisor escalate' "$sent" 2>/dev/null || true)" -eq 1 ] \
+    || fail "the first max-defer window did not type the digest exactly once"
+  grep -Fx 'needs-decision: pick F' "$typed" >/dev/null \
+    || fail "the first unprovable attempt recorded no item, so the next window cannot tell what the pane already has"
+  [ -s "$state/.subsuper-inject-wedged" ] || fail "the first window did not alarm"
+
+  # Reopen the window the way real time does, without waiting for it.
+  touch -t 202001010000 "$state/.subsuper-inject-wedged"
+  _run_maxdefer_window
+  [ "$(grep -c 'Supervisor escalate' "$sent" 2>/dev/null || true)" -eq 1 ] \
+    || fail "an already-typed item was typed again; a long turn would queue one copy per max-defer window"
+  [ "$(_file_age "$state/.subsuper-inject-wedged")" -lt 60 ] \
+    || fail "skipping the retype also silenced the wedge alarm, so the stall became invisible"
+  grep -F 'pick F' "$state/.subsuper-escalations" >/dev/null || fail "buffer lost while re-alarming"
+
+  # A new escalation has never reached the pane and must be attempted.
+  escalate_add "$state" "needs-decision: pick G"
+  touch -t 202001010000 "$state/.subsuper-inject-wedged"
+  _run_maxdefer_window
+  [ "$(grep -c 'Supervisor escalate' "$sent" 2>/dev/null || true)" -eq 2 ] \
+    || fail "a genuinely new escalation was not typed, so the per-item bound suppressed real delivery"
+  grep -F 'pick G' "$sent" >/dev/null || fail "the retyped digest does not carry the new escalation"
+  unset -f _run_maxdefer_window
+  pass "max-defer: an already-typed item alarms without being retyped, while a new escalation is typed again"
+}
+
+# The bound has to be per ITEM, not per digest. An unprovable attempt keeps the
+# buffer and the buffer only grows, so a digest-wide bound bounds nothing: the
+# pane receives A, then A | B, then A | B | C, which is N(N+1)/2 item copies over
+# N escalations and ends as one line holding everything, typed through send-keys
+# into a TUI composer.
+test_unprovable_retypes_carry_only_the_new_items() {
+  local dir state sent last
+  dir=$(make_supercase unprovable-per-item)
+  state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
+  afk_enter "$state"
+  _flush_unprovable() {
+    if (
+      fm_backend_target_exists() { return 0; }
+      pane_is_busy() { return 0; }
+      fm_backend_composer_state() { printf 'empty'; }
+      fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+      FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="fakepane" \
+        escalate_flush "$state" max-defer
+    ); then
+      fail "an unprovable busy delivery reported success and would have cleared the buffer"
+    fi
+  }
+
+  escalate_add "$state" "blocked: alpha"; _flush_unprovable
+  escalate_add "$state" "blocked: bravo"; _flush_unprovable
+  escalate_add "$state" "blocked: charlie"; _flush_unprovable
+
+  [ "$(grep -c 'Supervisor escalate' "$sent")" -eq 3 ] \
+    || fail "expected one typed digest per escalation, got $(grep -c 'Supervisor escalate' "$sent")"
+  [ "$(grep -c 'blocked: alpha' "$sent")" -eq 1 ] \
+    || fail "alpha reached the pane $(grep -c 'blocked: alpha' "$sent") times; every later digest is re-carrying it"
+  [ "$(grep -c 'blocked: bravo' "$sent")" -eq 1 ] \
+    || fail "bravo reached the pane $(grep -c 'blocked: bravo' "$sent") times"
+  last=$(tail -1 "$sent")
+  assert_contains "$last" 'blocked: charlie' "the last digest did not carry the newest escalation"
+  assert_not_contains "$last" 'blocked: alpha' "the last digest still carries every earlier item, so the typed line grows without bound"
+  assert_contains "$last" '(1 event(s))' "the digest miscounts the items it actually carries"
+
+  # Nothing is dropped by the bound: an unproven item stays buffered and stays in
+  # the alarm until a delivery is confirmed.
+  grep -F 'blocked: alpha' "$state/.subsuper-escalations" >/dev/null || fail "alpha was dropped from the buffer by an attempt nothing could prove"
+  grep -F 'blocked: charlie' "$state/.subsuper-escalations" >/dev/null || fail "charlie was dropped from the buffer"
+  unset -f _flush_unprovable
+  pass "escalate_flush: each escalation reaches a never-confirming pane once, and the buffer still holds them all"
+}
+
+# The other direction of the per-item record: an item only an unprovable attempt
+# ever typed must NOT be cleared by a later confirmed flush that did not carry
+# it. A confirmed flush clears exactly the items in its own digest.
+test_confirmed_flush_keeps_items_it_did_not_carry() {
+  local dir state sent rc
+  dir=$(make_supercase per-item-not-dropped)
+  state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
+  afk_enter "$state"
+  # The stub reads want_busy, not busy: inject_msg declares `local busy` and
+  # bash's dynamic scoping would otherwise resolve the stub's own flag to it.
+  _flush_pane() {  # <want-busy 0|1>
+    local want_busy=$1
+    (
+      fm_backend_target_exists() { return 0; }
+      pane_is_busy() { [ "$want_busy" = 1 ]; }
+      fm_backend_composer_state() { printf 'empty'; }
+      fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+      FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="fakepane" \
+        escalate_flush "$state" max-defer
+    )
+  }
+
+  escalate_add "$state" "blocked: unproven-item"
+  _flush_pane 1 && fail "a busy unverified pane confirmed a delivery it cannot prove"
+  escalate_add "$state" "done: proven-item"
+  _flush_pane 0
+  rc=$?
+  [ "$rc" -eq 3 ] || fail "a flush that delivered one item while another stayed buffered reported $rc, not the partly-delivered code its caller needs"
+
+  assert_contains "$(tail -1 "$sent")" 'done: proven-item' "the confirmed flush did not carry the new escalation"
+  grep -F 'blocked: unproven-item' "$state/.subsuper-escalations" >/dev/null \
+    || fail "a confirmed flush cleared an item only an unprovable attempt ever typed, so it was lost"
+  grep -F 'done: proven-item' "$state/.subsuper-escalations" >/dev/null \
+    && fail "the confirmed flush kept the item it actually delivered, so the captain gets it twice"
+  [ ! -e "$state/.subsuper-inject-typed" ] \
+    || fail "the typed record survived a confirmed flush, so the surviving item could never be re-sent"
+
+  _flush_pane 0 || fail "the retained unproven item was not re-sent once the pane could confirm it"
+  assert_contains "$(tail -1 "$sent")" 'blocked: unproven-item' "the follow-up flush did not carry the retained item"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "the buffer never drained after every item was confirmed"
+  [ ! -e "$state/.subsuper-escalations.since" ] || fail "a fully drained buffer kept its age sidecar, so the next item would look old on arrival"
+  unset -f _flush_pane
+  pass "escalate_flush: a confirmed flush clears only what it carried and re-sends what only an unproven attempt typed"
+}
+
+# A flush can now confirm only PART of the buffer: the items it carried land
+# while an item an earlier unprovable attempt typed stays buffered and
+# unconfirmed. A caller that reads that as full success logs a recovery that did
+# not happen and drops the durable wedge evidence while the wedge condition still
+# holds - the same misleading report as telling the captain nothing was delivered
+# when something was. The marker has to outlive every outstanding item.
+test_partly_delivered_flush_is_not_reported_as_recovery() {
+  local dir state sent daemon_log
+  dir=$(make_supercase partial-flush-report)
+  state="$dir/state"; sent="$dir/sent.log"; daemon_log="$dir/daemon.log"
+  : > "$sent"; : > "$daemon_log"
+  afk_enter "$state"
+  _report_window() {  # <want-busy 0|1>
+    local want_busy=$1
+    (
+      fm_backend_target_exists() { return 0; }
+      pane_is_busy() { [ "$want_busy" = 1 ]; }
+      fm_backend_composer_state() { printf 'empty'; }
+      fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+      LOG="$daemon_log" FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux \
+        FM_SUPERVISOR_TARGET="fakepane" FM_ESCALATE_BATCH_SECS=99999 FM_MAX_DEFER_SECS=60 \
+        housekeeping "$state"
+    ) || fail "max-defer housekeeping window failed"
+  }
+
+  escalate_add "$state" "blocked: alpha"
+  echo $(( $(date +%s) - 600 )) > "$state/.subsuper-escalations.since"
+  _report_window 1
+  [ -s "$state/.subsuper-inject-wedged" ] || fail "the unprovable attempt did not raise the wedge alarm"
+
+  # The primary goes idle with a newer item buffered: the flush confirms bravo and
+  # keeps alpha, which nothing has ever confirmed.
+  escalate_add "$state" "done: bravo"
+  touch -t 202001010000 "$state/.subsuper-inject-wedged"
+  _report_window 0
+  assert_contains "$(tail -1 "$sent")" 'done: bravo' "the idle window did not deliver the newer escalation"
+  grep -F 'blocked: alpha' "$state/.subsuper-escalations" >/dev/null \
+    || fail "the partly delivered flush dropped the item it never confirmed"
+  [ -s "$state/.subsuper-inject-wedged" ] \
+    || fail "the wedge marker was removed while an unconfirmed item was still buffered, so the captain loses the wedge evidence"
+  grep -F 'inject recovered: max-defer flush succeeded' "$daemon_log" >/dev/null \
+    && fail "a partly delivered flush was reported as a recovery, asserting a delivery that never happened for the retained item"
+
+  # The other direction: a flush that really does empty the buffer still reports
+  # recovery and still clears the marker.
+  touch -t 202001010000 "$state/.subsuper-inject-wedged"
+  _report_window 0
+  assert_contains "$(tail -1 "$sent")" 'blocked: alpha' "the follow-up window did not deliver the retained item"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "the buffer never drained once every item was confirmed"
+  [ ! -e "$state/.subsuper-inject-wedged" ] \
+    || fail "the wedge marker outlived a flush that left nothing outstanding"
+  grep -F 'inject recovered: max-defer flush succeeded' "$daemon_log" >/dev/null \
+    || fail "a flush that emptied the buffer no longer reports recovery"
+  unset -f _report_window
+  pass "max-defer: recovery is reported and the wedge marker dropped only once nothing is left outstanding"
+}
+
+# state/.subsuper-inject-wedged is a captain-facing artifact: bin/fm-afk-return.sh
+# carries its first line into the return catch-up and the /afk skill tells
+# firstmate to surface it on the "while you were out" summary. On the two paths
+# added here the digest IS typed and submitted into a busy pane and may well be
+# queued; only the CONFIRMATION fails. A marker that reports a refusal there tells
+# the captain nothing arrived when something may have, which is the same
+# misleading silence the alarm exists to remove. The first line's shape is the
+# separate contract fm-afk-return.sh parses, so it must survive unchanged.
+test_wedge_marker_reports_unconfirmed_delivery_not_refusal() {
+  local dir state sent marker body
+  dir=$(make_supercase wedge-marker-wording)
+  state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
+  marker="$state/.subsuper-inject-wedged"
+  escalate_add "$state" "needs-decision: pick W"
+  echo $(( $(date +%s) - 600 )) > "$state/.subsuper-escalations.since"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    pane_is_busy() { return 0; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+    FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="fakepane" \
+      FM_ESCALATE_BATCH_SECS=99999 FM_MAX_DEFER_SECS=60 housekeeping "$state"
+  ) || fail "max-defer housekeeping window failed"
+
+  assert_grep 'needs-decision: pick W' "$sent" \
+    "the max-defer attempt never reached the pane, so this case no longer covers a possibly-delivered digest"
+  [ -s "$marker" ] || fail "the unprovable busy attempt raised no wedge marker"
+
+  head -1 "$marker" | grep -Eq '^fm away-mode inject WEDGED: [0-9]+s undelivered' \
+    || fail "the marker's first line lost the shape bin/fm-afk-return.sh parses: $(head -1 "$marker")"
+
+  body=$(tail -n +2 "$marker")
+  assert_not_contains "$body" 'could not accept' \
+    "the marker tells the captain the pane refused a digest that was typed and submitted and may be queued"
+  assert_contains "$body" 'could not be confirmed' \
+    "the marker does not say what actually failed: the confirmation, not the delivery"
+  assert_contains "$body" 'possibly-delivered' \
+    "the marker does not tell the captain the buffered items may already have arrived"
+  assert_grep 'needs-decision: pick W' "$marker" \
+    "the marker dropped the buffered items it is supposed to surface"
+  pass "the wedge marker reports an unconfirmed delivery, not a refusal, and keeps the first line fm-afk-return.sh parses"
+}
+
+# Delivery must not depend on an external hashing tool. The daemon no longer
+# hashes; this case guards against reintroducing one. An earlier digest-hash
+# bound produced an EMPTY signature when neither md5 nor md5sum was on PATH, and
+# an empty signature compared against an absent marker matched on the very first
+# attempt: the digest was never typed, the marker never written, and every later
+# window repeated the same early return while the log claimed the digest had
+# already been typed. That is a silent return to never delivering into a busy
+# pane, which is exactly what away-mode delivery exists to remove.
+test_busy_delivery_needs_no_external_hash_tool() {
+  local dir state sent toolbin tool src
+  dir=$(make_supercase no-hash-tool)
+  state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
+  toolbin="$dir/toolbin"; mkdir -p "$toolbin"
+  for tool in awk cat cut date grep mkdir rm sed stat tail touch tr wc; do
+    src=$(command -v "$tool" 2>/dev/null) && ln -sf "$src" "$toolbin/$tool"
+  done
+  escalate_add "$state" "blocked: hash-free delivery"
+  afk_enter "$state"
+  (
+    PATH="$toolbin"
+    command -v md5 >/dev/null 2>&1 && fail "md5 is still reachable, so this case does not model a host without a hashing tool"
+    command -v md5sum >/dev/null 2>&1 && fail "md5sum is still reachable, so this case does not model a host without a hashing tool"
+    fm_backend_target_exists() { return 0; }
+    pane_is_busy() { return 0; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+    if FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="fakepane" \
+      escalate_flush "$state" max-defer; then
+      fail "an unprovable busy delivery reported success on a host with no hashing tool"
+    fi
+  ) || fail "hash-free escalate_flush subshell failed"
+  grep -F 'blocked: hash-free delivery' "$sent" >/dev/null \
+    || fail "nothing was typed into the busy pane on a host with no md5 or md5sum, so delivery silently stopped"
+  grep -F 'blocked: hash-free delivery' "$state/.subsuper-escalations" >/dev/null \
+    || fail "the escalation was dropped on a delivery nothing could prove"
+  pass "escalate_flush: a busy pane is still typed into on a host carrying neither md5 nor md5sum"
+}
+
+# The record is session-scoped delivery state. A confirmed flush must drop it, or
+# the next away session could see a matching digest and refuse to type it.
+test_confirmed_flush_clears_the_typed_digest_record() {
+  local dir state
+  dir=$(make_supercase typed-record-cleared)
+  state="$dir/state"
+  printf 'stale-signature\n' > "$state/.subsuper-inject-typed"
+  escalate_add "$state" "done: PR https://x/y/pull/9"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    pane_is_busy() { return 1; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf 'empty'; }
+    FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" escalate_flush "$state" \
+      || fail "a confirmed idle flush reported failure"
+  ) || fail "typed-record clearing escalate_flush subshell failed"
+  [ ! -e "$state/.subsuper-inject-typed" ] \
+    || fail "the typed-digest record survived a confirmed delivery and could suppress a later identical digest"
+  pass "escalate_flush: a confirmed delivery drops the typed-digest record with the rest of the buffer state"
+}
+
+# A busy pane on a harness that CLEARS its composer on a landed Enter, driven end
+# to end through escalate_flush. The stub models that measured contract rather
+# than a fixed answer: the digest is typed once, each Enter either lands (the
+# composer clears) or is swallowed (the digest stays visible), a composer still
+# holding text when the budget runs out is a proven `pending` handed to the real
+# shared policy fm_composer_queued_enter_verdict, and the composer read reports
+# what the modelled pane actually shows.
+#
+# That shared conversion is deliberately harness-agnostic and reads busy+pending
+# as a queued line, which is right for opencode and wrong here: for claude the
+# same picture is a SWALLOWED Enter. Delivery therefore has to be confirmed
+# against the composer itself, or a fully swallowed budget clears the buffer with
+# the digest unsent and no alarm.
+#
+# The stub's paths travel through the environment rather than an enclosing
+# variable: inject_msg declares `local composer`, and bash's dynamic scoping would
+# otherwise resolve the stub's `$composer` to the daemon's own verdict.
+_install_clearing_harness_pane() {  # <dir>
+  export FM_FAKE_PANE_TEXT="$1/pane-text" FM_FAKE_ENTERS="$1/enters" FM_FAKE_SWALLOW="$1/.swallow"
+  fm_backend_target_exists() { return 0; }
+  pane_is_busy() { return 0; }
+  fm_backend_composer_state() {
+    if [ -s "$FM_FAKE_PANE_TEXT" ]; then printf 'pending'; else printf 'empty'; fi
+  }
+  fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> ...
+    local budget=$4 n=0
+    printf '%s' "$3" > "$FM_FAKE_PANE_TEXT"
+    while [ "$n" -lt "$budget" ]; do
+      n=$((n + 1))
+      if [ -f "$FM_FAKE_SWALLOW" ]; then
+        [ "${FM_FAKE_PERSIST_SWALLOW:-0}" = 1 ] || rm -f "$FM_FAKE_SWALLOW"
+        continue
+      fi
+      : > "$FM_FAKE_PANE_TEXT"
+      break
+    done
+    printf '%s\n' "$n" > "$FM_FAKE_ENTERS"
+    if [ -s "$FM_FAKE_PANE_TEXT" ]; then
+      fm_composer_queued_enter_verdict pending busy
+    else
+      printf 'empty'
+    fi
+  }
+}
+
+test_busy_claude_recovers_a_swallowed_first_enter() {
+  local dir state status=0
+  dir=$(make_supercase busy-claude-swallow)
+  state="$dir/state"
+  touch "$dir/.swallow"
+  escalate_add "$state" "needs-decision: pick C"
+  afk_enter "$state"
+  (
+    _install_clearing_harness_pane "$dir"
+    FM_DAEMON_PRIMARY_HARNESS=claude FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      escalate_flush "$state"
+  ) || status=$?
+  [ "$status" -eq 0 ] || fail "a busy claude injection whose retried Enter landed reported failure ($status)"
+  [ ! -s "$dir/pane-text" ] \
+    || fail "delivery was confirmed and the buffer cleared while the digest was still sitting unsent in claude's composer"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "buffer not cleared after a genuinely landed retry"
+  [ "$(cat "$dir/enters")" -eq 2 ] \
+    || fail "expected the swallowed Enter plus one landing retry, got $(cat "$dir/enters") Enter(s)"
+  pass "inject_msg: a swallowed first Enter into a busy claude pane is recovered by the retry, never confirmed by the swallow"
+}
+
+# Every Enter swallowed. The shared conversion still reports `empty`, so the
+# daemon's own composer check is the only thing standing between the captain and
+# a lost escalation.
+test_busy_claude_fully_swallowed_budget_is_never_confirmed() {
+  local dir state status=0
+  dir=$(make_supercase busy-claude-swallow-all)
+  state="$dir/state"
+  touch "$dir/.swallow"
+  escalate_add "$state" "needs-decision: pick D"
+  afk_enter "$state"
+  (
+    _install_clearing_harness_pane "$dir"
+    FM_FAKE_PERSIST_SWALLOW=1 FM_DAEMON_PRIMARY_HARNESS=claude \
+      FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      escalate_flush "$state"
+  ) || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a busy claude pane that swallowed every Enter reported delivery, so the buffer was cleared with the digest unsent"
+  grep -F 'pick D' "$state/.subsuper-escalations" >/dev/null \
+    || fail "the escalation was dropped even though every Enter was swallowed and the digest is still in the composer"
+  [ -s "$dir/pane-text" ] || fail "the fake pane cleared its composer, so this case never exercised a swallow"
+  pass "inject_msg: a fully swallowed Enter budget on a busy claude pane is unconfirmed and the escalation survives"
+}
+
+# The escape ends the wait; it never lowers the composer bar. A busy pane whose
+# state genuinely cannot be read safely still refuses, and that refusal alarms.
+test_max_defer_busy_unverified_still_alarms_on_an_unreadable_composer() {
+  local dir state sent
+  dir=$(make_supercase maxdefer-busy-unverified-guard)
+  state="$dir/state"; sent="$dir/sent.log"; : > "$sent"
+  escalate_add "$state" "needs-decision: pick B"
+  echo $(( $(date +%s) - 600 )) > "$state/.subsuper-escalations.since"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    pane_is_busy() { return 0; }
+    fm_backend_composer_state() { printf 'unknown'; }
+    fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$sent"; printf 'empty'; }
+    FM_DAEMON_PRIMARY_HARNESS=codex FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="fakepane" \
+      FM_ESCALATE_BATCH_SECS=99999 FM_MAX_DEFER_SECS=60 housekeeping "$state"
+  ) || fail "max-defer busy-unverified composer-guard housekeeping subshell failed"
+  [ ! -s "$sent" ] || fail "max-defer typed into a busy pane whose composer was never proven empty"
+  [ -s "$state/.subsuper-inject-wedged" ] \
+    || fail "an unreadable composer on a busy unverified primary stalled without raising the wedge alarm"
+  [ -s "$state/.subsuper-escalations" ] || fail "buffer lost while the composer was unreadable"
+  pass "max-defer: an unreadable composer on a busy unverified primary still refuses, and the stall is visible"
 }
 
 test_inject_msg_herdr_composer_guard_defers() {
@@ -2021,6 +2631,22 @@ test_primary_busy_guard_is_harness_scoped
 test_pane_is_busy_defaults_to_tmux_when_backend_omitted
 test_pane_input_pending_herdr_dispatch
 test_inject_msg_herdr_busy_guard_defers
+test_inject_msg_busy_pane_delivers_for_a_queueing_harness
+test_inject_msg_busy_pane_still_honors_the_composer_guard
+test_max_defer_attempts_but_never_confirms_a_busy_unverified_harness
+test_max_defer_busy_unverified_still_alarms_on_an_unreadable_composer
+test_inject_msg_caps_enters_only_where_a_queue_stays_visible
+test_busy_visible_queue_harness_is_typed_but_never_confirmed
+test_idle_visible_queue_harness_still_confirms_and_clears
+test_max_defer_alarms_without_retyping_already_typed_items
+test_unprovable_retypes_carry_only_the_new_items
+test_confirmed_flush_keeps_items_it_did_not_carry
+test_partly_delivered_flush_is_not_reported_as_recovery
+test_wedge_marker_reports_unconfirmed_delivery_not_refusal
+test_busy_delivery_needs_no_external_hash_tool
+test_confirmed_flush_clears_the_typed_digest_record
+test_busy_claude_recovers_a_swallowed_first_enter
+test_busy_claude_fully_swallowed_budget_is_never_confirmed
 test_inject_msg_herdr_composer_guard_defers
 test_inject_msg_herdr_pane_gone_defers
 test_inject_msg_herdr_submits_through_backend_dispatch

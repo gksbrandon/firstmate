@@ -251,6 +251,15 @@ A bare shell prompt is never an empty agent composer.
 Away-mode injection proceeds only on an affirmative `empty` result, never on unknown.
 This prevents a dead agent pane from receiving and possibly executing an escalation as shell input.
 
+That affirmative composer result, not an idle pane, is what gates an away-mode injection.
+A Firstmate primary can hold a single turn for hours, so refusing every busy pane meant refusing delivery outright; `bin/fm-composer-lib.sh` owns the set of harnesses verified to queue a submitted line as their next turn, and only those are injected into mid-turn on sight.
+Claude is verified there, so an escalation typed into its empty composer during a turn is answered when that turn ends rather than lost.
+An unlisted harness waits for an idle window rather than borrowing that proof, and the daemon's max-defer escape ends that wait with a delivery attempt instead of an indefinite stall.
+That attempt never clears the escalation buffer and always raises the wedge alarm, because an empty composer on an unmeasured harness is not proof the line was queued rather than discarded.
+The same holds for a listed harness that keeps its queued line visible in the composer: `pending` reads identically whether the Enter queued or was swallowed, so that delivery is attempted but never confirmed either.
+Any such unprovable attempt is bounded per item rather than per digest, so a re-type after a new escalation carries only the new items and a long turn keeps alarming without retyping an escalation the pane already has.
+[`verification/runtime-backends.md`](verification/runtime-backends.md#busy-pane-injection) owns the dated measurement and the opt-in live command that refreshes it.
+
 The current operational envelope starts with U+2063 and `FIRSTMATE_OP: `.
 The separate routed-request carrier uses `[fm-from-firstmate]` plus U+2063.
 U+2063 survives Herdr terminal input as text, unlike the legacy ASCII control separator that could erase the visible routing label.
@@ -329,6 +338,7 @@ Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never 
 tests/fm-backend-herdr.test.sh
 tests/fm-composer-lib.test.sh
 tests/fm-herdr-submit-confirm-live-e2e.test.sh
+tests/fm-herdr-busy-inject-live-e2e.test.sh
 tests/fm-backend-herdr-smoke.test.sh
 tests/fm-backend-herdr-prune-safety-e2e.test.sh
 tests/fm-backend-herdr-respawn-idem-e2e.test.sh

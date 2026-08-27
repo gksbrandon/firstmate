@@ -1337,6 +1337,91 @@ fm_composer_queued_enter_verdict() {  # <composer-state> <busy|idle|unknown>
   fi
 }
 
+# The harnesses VERIFIED to QUEUE a line submitted into an empty composer while
+# a turn is already running: the text becomes the next user turn rather than
+# being lost, merged into the running turn, or read as an answer to an
+# in-flight prompt.
+#
+# This set exists because the away daemon's busy guard was an absolute refusal,
+# and a firstmate primary that is continuously mid-turn never presents a sampled
+# idle window to win it. On the fleet's own claude-on-herdr primary (2026-08-26,
+# herdr 0.7.5) every 15-second poll across 71 minutes deferred on `pane busy`
+# and nothing else, so no escalation reached the captain until they came back.
+# Sampling that pane separately showed the busy reads tracking real turns rather
+# than sticking, so the guard was right and the policy was wrong.
+#
+# Queueing is vendor behavior, so an UNLISTED harness is never assumed to queue.
+# Adding one means live proof, the same discipline every rendered signature above
+# follows. Claude's is tests/fm-herdr-busy-inject-live-e2e.test.sh. Opencode's
+# predates this set: opencode 1.18.4 accepts a mid-turn Enter and queues it for
+# after the current turn, which is why the submit cores already carry a
+# queued-Enter exception for it (bin/fm-tmux-lib.sh, bin/backends/herdr.sh) and
+# why docs/tmux-backend.md and docs/verification/runtime-backends.md pin it.
+#
+# An unlisted harness does not wedge. It waits for an idle window, and
+# bin/fm-supervise-daemon.sh's max-defer escape attempts delivery anyway once the
+# wait passes FM_MAX_DEFER_SECS, under the same composer guard and proof-carrying
+# submit. That attempt is never treated as confirmation, so the buffer survives
+# and the wedge alarm fires. Membership here buys PROVEN mid-turn delivery that
+# can clear the buffer, not the only path to an attempt. Newline-separated and
+# consumed by `read` for the same reasons as the glyph sets above.
+FM_COMPOSER_BUSY_QUEUEING_HARNESSES=$(printf '%s\n' 'claude' 'opencode')
+
+# Whether a queued line stays VISIBLE in the composer is a SEPARATE per-harness
+# fact from whether the harness queues at all, and it decides what a post-Enter
+# `pending` read means:
+#
+#   opencode keeps the typed text until the running turn ends, so `pending` is
+#   the EXPECTED look of a successfully queued line. It reads pending on every
+#   pass and only converts once the Enter budget is spent
+#   (fm_composer_queued_enter_verdict), so every retry is a plausible SECOND
+#   queued turn and the captain could receive one copy per Enter.
+#
+#   claude clears its composer on a landed Enter, so `pending` means the Enter
+#   was SWALLOWED and the digest is sitting unsent. Retrying Enter is the only
+#   thing that recovers it, and an extra Enter on an already-cleared claude
+#   composer is a documented no-op rather than a duplicate delivery
+#   (bin/backends/herdr.sh). Claude therefore spends the retry budget exactly
+#   when it is needed and must keep it in full.
+#
+# So the away daemon caps its Enter budget for a listed harness here and leaves
+# it alone for every other, rather than capping every busy pane. Do not add a
+# second conversion path for opencode; the shared queued-Enter verdict covers it.
+#
+# Membership also costs a listed harness the right to CONFIRM a busy delivery.
+# `pending` looks identical whether the Enter queued the line or was swallowed,
+# so no post-submit read can prove it landed, and the shared conversion reports
+# `empty` on a spent budget either way. The daemon therefore types into a listed
+# busy harness but keeps the buffer and leaves the wedge alarm reachable, the same
+# posture it takes for a harness with no verified queueing behavior at all. A
+# duplicate is recoverable; a dropped escalation is not.
+FM_COMPOSER_BUSY_QUEUE_VISIBLE_HARNESSES=$(printf '%s\n' 'opencode')
+
+_fm_composer_harness_listed() {  # <harness> <newline-separated-set>
+  local harness=${1:-} set=${2:-} entry
+  [ -n "$harness" ] || return 1
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    [ "$entry" = "$harness" ] && return 0
+  done <<EOF
+$set
+EOF
+  return 1
+}
+
+# fm_composer_busy_queues_input: 0 when <harness> is verified to queue. An empty
+# or unknown harness is never assumed to queue.
+fm_composer_busy_queues_input() {  # <harness>
+  _fm_composer_harness_listed "${1:-}" "$FM_COMPOSER_BUSY_QUEUEING_HARNESSES"
+}
+
+# fm_composer_busy_queue_keeps_text: 0 when <harness> leaves a queued line
+# visible in its composer, so a post-Enter `pending` is the queue rather than a
+# swallow and re-sending Enter would queue the line again.
+fm_composer_busy_queue_keeps_text() {  # <harness>
+  _fm_composer_harness_listed "${1:-}" "$FM_COMPOSER_BUSY_QUEUE_VISIBLE_HARNESSES"
+}
+
 _fm_composer_classify_pi_rows() {  # <screen> <styled>
   local screen=$1 styled=$2 row raw content
   row=$((FM_COMPOSER_SCAN_PI_OPEN + 1))

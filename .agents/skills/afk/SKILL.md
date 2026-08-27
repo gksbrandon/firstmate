@@ -88,29 +88,53 @@ The operational prefix travels with the message text; it does not rely on harnes
 
 ## Busy-guard and composer guard
 
-The daemon never injects into an in-use pane. Two checks run before every
-injection, dispatched through `bin/fm-backend.sh` for the supervisor's own
-backend (tmux or herdr; see "Auto-discovered supervisor pane" below):
+Two checks run before every injection, dispatched through `bin/fm-backend.sh`
+for the supervisor's own backend (tmux or herdr; see "Auto-discovered supervisor
+pane" below):
 
 - **Primary-pane busy guard** - `pane_is_busy` trusts Herdr native `busy` when available, otherwise matches rendered output against only the detected primary harness's signature.
   This narrow delivery guard never classifies a recorded worker task and never uses a global union of vendor patterns.
+  A busy pane is a **wait, never a refusal**: it decides how long an escalation is delayed, not whether it ever arrives.
+  That distinction exists because a firstmate primary can stay mid-turn for hours, so waiting for an idle pane means never delivering: on 2026-08-26 every escalation buffered for 71 minutes behind an absolute refusal.
+  `fm_composer_busy_queues_input` (`bin/fm-composer-lib.sh`) owns the set of primary harnesses verified to queue a submitted line as their next turn: **claude** (live, 2026-08-26) and **opencode** (1.18.4, the same queued-Enter behavior the submit cores already carry an exception for).
+  Those two are injected into immediately, mid-turn, but only claude can also **confirm** that delivery and clear the buffer, because only claude's composer clears on a landed Enter.
+  Every other primary (**codex, pi, pi-signed, grok, kimi, cursor**) waits for an idle window instead, because queueing is vendor behavior and cannot be assumed from another harness's proof.
+  That wait is bounded by the max-defer escape below, which types the digest anyway rather than waiting forever, but never counts it as confirmation: the buffer survives and the wedge alarm fires regardless of what the submit reports, because an empty composer cannot tell "queued" from "discarded and redrawn" on a harness nobody measured.
+  So no primary is silently starved and none is silently dropped.
+  **muse** is the exception to that list, and it is not a supported primary in the first place; `.agents/skills/harness-adapters/SKILL.md` owns that boundary.
+  It has no arm in `fm_busy_lines_match`, so it has **no registered busy signature on the rendered path** and never reads busy there at all, which means a pane detected as muse is injected into on any tick with no bounded wait and no queueing proof.
+  Registering a muse signature needs live verification against the real harness.
+  The boundary matters most on the terminal-backed launcher path (`bin/fm-afk-launch.sh` passes the captain's harness in as `FM_DAEMON_PRIMARY_HARNESS`), where tmux has no native busy state and the rendered signature is the whole busy verdict.
+  Only one Enter is sent into a busy pane whose harness keeps a queued line **visible** (`fm_composer_busy_queue_keeps_text`, opencode), because there a post-Enter `pending` is what a successful queue looks like and each extra Enter is a plausible duplicate escalation.
+  That same ambiguity means a visible-queue harness can never **prove** a busy delivery, since `pending` reads identically whether the Enter queued the line or was swallowed, so it is treated exactly like an unverified harness: typed once, buffer kept, wedge alarm reachable.
+  Claude keeps its full retry budget: it clears its composer on a landed Enter, so `pending` means the Enter was swallowed and only a retry recovers it, while an extra Enter on an already-cleared composer is a no-op.
+  Claude's busy delivery is therefore confirmed against the **composer**, not the submit verdict alone: the shared retries-exhausted conversion reads busy plus `pending` as a queued line, which would otherwise report a fully swallowed Enter budget as delivered.
+  Only an affirmatively cleared composer counts there; anything else keeps the buffer and leaves the wedge alarm reachable.
+  Any attempt that cannot be proven is bounded **per item**, not per digest: `state/.subsuper-inject-typed` records the individual items that reached the pane, so a re-type after a new escalation carries only the new ones and each item is typed about once, however long the turn runs.
+  Without that the digest would grow while the buffer is kept, so N escalations would send N digests carrying N(N+1)/2 item copies, ending in one line holding everything.
+  Nothing is dropped by the bound: an item stays buffered, and stays in the wedge alarm, until a delivery is confirmed, and a confirmed flush clears only the items it actually carried, so an item that only an unprovable attempt ever typed is re-sent once the pane can confirm it.
+  The composer guard below and the verified submit, not the harness set, are what keep any of these injections safe.
 - **Composer-state guard** - `inject_msg` reads the full `empty`/`pending`/`pending-unproven`/`unknown` verdict from `fm_backend_composer_state` and injects only when it is affirmatively `empty`.
   Every other or future verdict defers, including an unreadable pane, ambiguous geometry, a blank unidentified row, and a bare shell prompt left after the agent exits.
   Each adapter contributes only capture and capability facts to the fleet-wide screen classifier in `bin/fm-composer-lib.sh`, which owns every shape and verdict.
   It preserves proven idle composers as empty but requires a genuine container around shell glyphs; see `docs/herdr-backend.md` "Composer and injection safety" for the operator contract.
   `pane_input_pending` is the tested fail-closed predicate for callers that need to know whether the composer is unsafe: it treats every result except exact `empty` as pending.
 
-A busy primary pane, or any composer verdict other than `empty`, defers the injection; the buffered escalation survives in `state/.subsuper-escalations` and is retried on the next housekeeping tick.
+A deferred injection leaves the buffered escalation in `state/.subsuper-escalations`, retried on the next housekeeping tick.
 In afk mode the composer guard is belt-and-suspenders (no human is typing), but it protects against the race window between the captain returning and their message landing, a dead shell, and the daemon's own previous injection sitting unsent.
 
 **Max-defer escape (the daemon must never silently wedge).**
 If anything stays buffered past `FM_MAX_DEFER_SECS` (default 300), the daemon
-attempts one normal flush, which still requires an idle pane and an affirmatively empty composer.
-The alarm is defense in depth rather than a substitute for keeping every genuinely idle supported composer injectable.
+attempts one flush in max-defer mode, which still requires an affirmatively empty composer but no longer waits out a busy pane on an unverified harness.
+That is how a non-queueing primary's wait ends in a delivery attempt rather than a stall.
+Such an attempt never clears the buffer and always alarms, so the pre-existing defer-and-alarm visibility is kept and a duplicate is preferred to a lost escalation; the marker's age throttles the alarm to one per max-defer window, and the per-item typed record keeps an already-typed item from being retyped in each of those windows.
+The alarm is defense in depth rather than a substitute for keeping every supported composer injectable.
 If that submit cannot be confirmed, it raises a loud, rate-limited wedge alarm:
 an ERROR in the daemon log, a durable
 `state/.subsuper-inject-wedged` marker (surface it on the "while you were out"
 catch-up if present), a tmux status-line flash when applicable, and a configurable backend-independent active alert.
+A wedge means delivery was never **confirmed**, not that the pane refused the digest: on the busy paths above it was typed and submitted and may already be queued, so surface its buffered items as possibly-delivered rather than certainly lost, which is what the marker's own body says.
+The marker's first line keeps the word `undelivered` because `bin/fm-afk-return.sh` parses that shape into the durable return evidence; read that line as unconfirmed too.
 `docs/wedge-alarm.md` owns the alert channel setup, and `docs/verification/supervision.md` "Wedge-alarm channels" owns active evidence.
 So a guard false-positive becomes a visible stall, never an unbounded silent no-op.
 
@@ -179,7 +203,10 @@ the operational prefix lets firstmate distinguish it from a real captain message
   A blank or otherwise unidentified input row carries no positive container proof and defers injection, so a modal dialog or a mid-redraw pane is never an injection target.
 - **Max-defer escape** - the daemon must never silently wedge. If anything stays
   buffered past `FM_MAX_DEFER_SECS` (default 300s), the daemon attempts one
-  normal flush, which still requires an idle pane and an affirmatively empty composer. If that
+  max-defer flush, which still requires an affirmatively empty composer but stops
+  waiting out a busy pane on a harness with no verified queueing behavior. That
+  busy attempt is never counted as confirmation, so it keeps the buffer and alarms
+  whatever the submit reports. If a flush
   cannot confirm a submit, it raises a loud, rate-limited wedge alarm: ERROR log,
   durable `state/.subsuper-inject-wedged` marker, a tmux status-line flash when
   applicable, and a backend-independent active alert. A
@@ -216,7 +243,7 @@ the operational prefix lets firstmate distinguish it from a real captain message
 
 ## Stale-artifact lifecycle
 
-Treat `state/.subsuper-escalations`, its `.since` sidecar, and `state/.subsuper-inject-wedged` as session-scoped delivery artifacts, not as the durable work record.
+Treat `state/.subsuper-escalations`, its `.since` sidecar, `state/.subsuper-inject-wedged`, and `state/.subsuper-inject-typed` as session-scoped delivery artifacts, not as the durable work record.
 Always enter through `bin/fm-afk-launch.sh`, which clears prior-session artifacts only for a fresh entry and preserves the current session's buffer on refresh.
 Always exit through `bin/fm-afk-launch.sh stop`, which keeps `state/.afk` present through the daemon's shutdown flush and clears it last.
 `docs/herdr-backend.md` "Away-mode supervisor support" owns the current mechanism, and `docs/verification/runtime-backends.md` "Away-mode transport" owns active evidence.

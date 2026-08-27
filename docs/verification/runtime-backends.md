@@ -290,6 +290,61 @@ Observed 2026-08-19:
 ok - live Herdr submit confirm: Claude Code (2.1.236 (Claude Code)) on herdr 0.8.0 reports empty for a landed idle steer
 ```
 
+### Busy-pane injection
+
+Measured 2026-08-26 against Herdr 0.7.5 and Claude Code 2.1.224 in an isolated `fm-lab-` session, after an away-mode stretch in which every escalation stayed undelivered for 71 minutes.
+
+The daemon log recorded `inject deferred: supervisor pane busy (agent mid-turn)` on every 15-second poll and nothing else, so the composer read and the submit path were never reached.
+Sampling the primary confirmed the pane was genuinely working rather than misread: `herdr agent get` tracked real turns, flipping `working` to `idle` with its terminal title glyph, while the composer read `empty` throughout.
+Claude Code 2.1.x also renders no busy footer that `pane read` can see in any of its `visible`, `recent`, or `detection` sources, so native agent-state is the only usable busy signal for that harness.
+A Firstmate primary can therefore hold a single turn far longer than any poll interval, and an absolute busy refusal means never delivering.
+
+Injecting anyway was measured safe: with the composer affirmatively `empty`, `fm_backend_herdr_send_text_submit` returned `empty` on the first Enter, Claude rendered the text as a queued turn under `Press up to edit queued messages`, and answered it when the running turn ended.
+
+```text
+pre:  native=busy  composer=empty
+submit verdict: empty
+✻ Brewed for 1m 7s
+❯ MARKER-INJECT-7731 please reply with exactly: got 7731
+⏺ got 7731
+```
+
+The composer remains the gate that makes this safe.
+A Claude pane parked on a permission dialog was measured the same day: `agent get` reported `blocked` and the composer read `pending`, because the dialog's own selection rows are content, so keystrokes that would answer the prompt are refused rather than injected.
+
+`bin/fm-composer-lib.sh` records the harnesses verified to queue.
+OpenCode is the second entry, and it is admitted on the evidence already pinned above rather than on a new measurement: OpenCode 1.18.4 accepts a mid-turn Enter and queues it for after the current turn, which is the exact property this set gates on, and is why both submit cores already carry a queued-Enter exception for it.
+The two entries differ in what the post-Enter composer shows, which changes whether the delivery can be **proven** and not whether it happens: Claude clears its composer, so the submit reads `empty` directly and returns on the first Enter, while OpenCode keeps the typed text visible until the turn ends and reads `pending` on every pass.
+Whether a queued line stays visible is a separate per-harness fact from whether the harness queues, and it decides what a post-Enter `pending` means, so `bin/fm-composer-lib.sh` records the two separately.
+For OpenCode `pending` is what a successfully queued line looks like, so each retry is a plausible second queued turn; away-mode injection therefore sends exactly one Enter into a busy OpenCode pane, and the captain cannot receive the same digest once per retry.
+That visibility cuts both ways: because a swallowed Enter leaves the same `pending` picture, no post-submit read can prove an OpenCode busy delivery landed, and `fm_composer_queued_enter_verdict`'s harness-agnostic conversion would report `empty` on a spent budget either way.
+Away-mode injection therefore never lets a busy visible-queue harness clear the escalation buffer: the digest is typed, the buffer is kept, and the wedge alarm stays reachable, exactly as for a harness with no verified queueing behavior at all.
+A duplicate is recoverable and a dropped escalation is not, which is the same posture the max-defer escape takes below.
+Claude keeps its full budget, and must: it clears its composer on a landed Enter, so `pending` means the Enter was swallowed and the digest is sitting unsent, and the retries are what recover it.
+Claude spends the budget precisely when an Enter was swallowed, which is the case the budget exists for; capping it would convert a single swallow into a false confirmation that cleared the buffer with the text still in the composer.
+An extra Enter on an already-cleared Claude composer is a documented no-op rather than a duplicate delivery, so the full budget carries no duplicate risk.
+The same asymmetry decides what counts as confirmation: the submit cores' retries-exhausted conversion is harness-agnostic and reads busy plus a proven `pending` as a queued line, so on a composer-clearing harness a fully swallowed Enter budget would otherwise report delivery with the digest still unsent.
+Away-mode injection therefore re-reads the composer after the submit on a busy pane whose harness is absent from the visible-queue set, and only an affirmatively cleared composer is delivery; anything else preserves the buffer and leaves the wedge alarm reachable.
+Both are scoped to `inject_msg`; `INJECT_CONFIRM_RETRIES_DEFAULT`, `fm_composer_queued_enter_verdict`, and the shared submit cores' retry contract are unchanged.
+An unlisted harness is not assumed to queue and waits for an idle window instead, but that wait is bounded: `bin/fm-supervise-daemon.sh`'s max-defer escape types the digest anyway once the buffer passes `FM_MAX_DEFER_SECS`, under the same composer guard and verified submit.
+That attempt is never treated as confirmation, since an empty composer on an unmeasured harness cannot distinguish a queued line from a discarded one, so the buffer survives and the wedge alarm fires regardless of the verdict.
+Every unprovable attempt is bounded per ITEM rather than per digest: `state/.subsuper-inject-typed` holds the individual items that reached the pane, so a re-type after a new escalation carries only the new ones.
+Bounding the whole digest instead would not bound the pane at all, because the buffer is kept and therefore grows: N escalations would send N digests carrying N(N+1)/2 item copies, the last a single line holding every item.
+The bound drops nothing, because an item stays buffered and stays in the wedge alarm until a delivery is confirmed, and a confirmed flush clears exactly the items it carried, so an item only an unprovable attempt ever typed is re-sent once the pane can confirm it.
+No external hashing tool is involved, so a host without `md5` or `md5sum` still delivers into a busy pane.
+No primary is therefore silently starved, and none is silently dropped.
+Refresh the live proof with:
+
+```sh
+FM_HERDR_BUSY_INJECT_LIVE=1 tests/fm-herdr-busy-inject-live-e2e.test.sh
+```
+
+Observed 2026-08-26:
+
+```text
+ok - live Herdr busy-pane injection: Claude Code (2.1.224 (Claude Code)) on herdr 0.7.5 queues and answers an escalation injected mid-turn, while an unverified harness still defers, in isolated session fm-lab-herdr-busy-injec-94709-9073
+```
+
 ### Prune and respawn
 
 The real label-collision reproduction is owned by:
