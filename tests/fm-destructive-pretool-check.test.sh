@@ -85,6 +85,16 @@ matrix_case R07 deny neutral destructive-rm 'rm -rf "$WORKTREE/.git"'
 matrix_case R08 deny neutral destructive-rm 'echo staged && rm -rf projects/FAS'
 matrix_case R09 deny neutral destructive-rm 'rm -rf projects'
 matrix_case R10 deny neutral destructive-rm 'rm -Rf projects/FAS'
+# A .git component anywhere, not only last: the shell leaves the glob unexpanded
+# in the hook payload, and removing everything under .git detaches the checkout
+# exactly like removing .git itself.
+matrix_case R11 deny neutral destructive-rm 'rm -rf .git/*'
+matrix_case R12 deny neutral destructive-rm 'rm -rf "$WORKTREE/.git/objects"'
+# An operand that names no fleet path but resolves to the directory the command
+# runs in, or an ancestor of it, when that directory is a clone or pool.
+matrix_case R13 deny pool destructive-rm 'rm -rf .'
+matrix_case R14 deny clone destructive-rm 'rm -rf ..'
+matrix_case R15 deny pool destructive-rm 'rm -rf ./'
 
 # ALLOW: a removal that is not both recursive and forced, or not a fleet path.
 matrix_case r01 allow neutral '' 'rm -rf build'
@@ -94,6 +104,12 @@ matrix_case r04 allow neutral '' 'rm -r projects/FAS/tmp'
 matrix_case r05 allow neutral '' 'rm -rf my-projects/build'
 matrix_case r06 allow neutral '' 'rm -rf /tmp/scratch.gitignore'
 matrix_case r07 allow neutral '' 'rm -rf "$TMP"'
+# Self-or-ancestor resolution must stay that narrow: an ordinary build artifact
+# inside a pool worktree or a clone is still removable.
+matrix_case r08 allow pool '' 'rm -rf build'
+matrix_case r09 allow clone '' 'rm -rf node_modules/.cache'
+# Outside a clone or pool the resolved rule does not apply at all.
+matrix_case r10 allow neutral '' 'rm -rf .'
 
 # DENY: a push that deletes or force-updates a remote ref, against any remote.
 matrix_case P01 deny neutral destructive-push 'git push origin --delete rtc/s7-candidate'
@@ -141,6 +157,24 @@ matrix_case h07 allow pool '' 'git branch --list'
 # A force flag that creates or moves a branch is not a force-DELETE.
 matrix_case h08 allow clone '' 'git branch -f newbranch origin/main'
 matrix_case h09 allow clone '' 'git branch --force newbranch origin/main'
+
+# DENY: the same classes reached through a loop, a conditional, or `time`. Bulk
+# stale-branch cleanup in a loop is the shape the second incident takes at scale,
+# so a reserved word in front of the body must not hide the command it runs.
+matrix_case K01 deny neutral destructive-push 'for b in one two; do git push origin --delete $b; done'
+matrix_case K02 deny neutral destructive-push 'if git rev-parse HEAD; then git push origin --delete rtc/s7-candidate; fi'
+matrix_case K03 deny neutral destructive-push 'time git push origin --delete rtc/s7-candidate'
+matrix_case K04 deny neutral destructive-rm 'for f in a b; do rm -rf projects/FAS; done'
+matrix_case K05 deny clone destructive-git-history 'while read -r b; do git branch -D "$b"; done'
+matrix_case K06 deny pool destructive-git-history 'if [ -d x ]; then true; else git clean -fdx; fi'
+matrix_case K07 deny neutral destructive-rm 'until false; do rm -rf .treehouse/pool/1/repo; done'
+
+# ALLOW: the same compounds when the body is not destructive. Stripping a leading
+# reserved word must reach the real command, not turn every loop into a match.
+matrix_case k01 allow neutral '' 'for f in one two; do echo "$f"; done'
+matrix_case k02 allow clone '' 'for b in $(git branch --list); do echo "$b"; done'
+matrix_case k03 allow neutral '' 'for d in projects/*; do git -C "$d" status; done'
+matrix_case k04 allow clone '' 'time git status'
 
 # ALLOW: the command text as DATA. A guard that greps prose blocks all of these,
 # which is the false positive this structural classifier exists to avoid.
@@ -466,11 +500,95 @@ test_every_documented_harness_is_wired() {
   jq -e --arg c "$checker" '[.hooks.preToolUse[]? | select(.command? | type == "string" and contains($c))] | length == 1' \
     "$ROOT/.cursor/hooks.json" >/dev/null 2>&1 \
     || fail "Cursor preToolUse must register $checker exactly once"
-  assert_grep "$checker" "$ROOT/.opencode/plugins/fm-primary-destructive-check.js" \
-    "OpenCode plugin must call $checker"
-  assert_grep "$checker" "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" \
-    "Pi's primary extension must call $checker"
-  pass "destructive-guard: wired for every harness the seatbelt family covers"
+  pass "destructive-guard: registered in every declarative harness hook the seatbelt family covers"
+}
+
+# OpenCode and Pi register this guard in code rather than in a declarative hook
+# file, so their wiring is proven by driving the real handler and observing what
+# it does with a denied command, not by reading the adapter's source.
+test_opencode_plugin_blocks_a_denied_command() {
+  local fixture out rc=0
+  fixture="$TMP_ROOT/opencode-plugin"
+  make_checkout_fixture "$fixture" >/dev/null
+  mkdir -p "$fixture/.opencode/plugins"
+  cp "$ROOT/.opencode/plugins/fm-primary-destructive-check.js" "$fixture/.opencode/plugins/"
+  # directory is deliberately the clone rather than the plugin root, so the run
+  # also proves the checker is invoked in the session directory the gated class
+  # reads.
+  out=$(PLUGIN="$fixture/.opencode/plugins/fm-primary-destructive-check.js" \
+    WORKTREE="$fixture" DIRECTORY="$CLONE_CWD" \
+    node --input-type=module 2>&1 <<'JS'
+import { pathToFileURL } from "node:url";
+const plugin = await import(pathToFileURL(process.env.PLUGIN).href);
+const hooks = await plugin.FmPrimaryDestructiveCheck({
+  directory: process.env.DIRECTORY,
+  worktree: process.env.WORKTREE,
+});
+const before = hooks["tool.execute.before"];
+const run = async (tool, command) => {
+  try {
+    await before({ tool }, { args: { command } });
+    return "ran";
+  } catch (error) {
+    return `blocked:${error.message}`;
+  }
+};
+console.log(JSON.stringify({
+  incident: await run("bash", "git push origin --delete rtc/s7-candidate"),
+  gated: await run("bash", "git clean -fdx"),
+  recovery: await run("bash", "git push origin 66ad57f52d:refs/heads/rtc/s7-candidate"),
+  unrelated: await run("bash", "ls -la"),
+  otherTool: await run("read", "git push origin --delete rtc/s7-candidate"),
+}));
+JS
+  ) || rc=$?
+  expect_code 0 "$rc" "the OpenCode plugin harness must run: $out"
+  printf '%s' "$out" | jq -e '
+    (.incident | startswith("blocked:") and contains("[destructive-push]"))
+    and (.gated | startswith("blocked:") and contains("[destructive-git-history]"))
+    and .recovery == "ran" and .unrelated == "ran" and .otherTool == "ran"' >/dev/null 2>&1 \
+    || fail "OpenCode plugin did not block the denied commands through tool.execute.before: $out"
+  pass "destructive-guard: the OpenCode plugin throws from tool.execute.before on a denied bash command"
+}
+
+test_pi_extension_blocks_a_denied_command() {
+  local fixture out rc=0
+  fixture="$TMP_ROOT/pi-extension"
+  make_checkout_fixture "$fixture" >/dev/null
+  mkdir -p "$fixture/.pi/extensions/lib" "$fixture/state"
+  cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$fixture/.pi/extensions/"
+  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$fixture/.pi/extensions/lib/"
+  # The extension spawns the checker without a cwd override, so the process cwd
+  # is what the gated class reads; running from the clone is what arms it.
+  out=$( (cd "$CLONE_CWD" && EXT="$fixture/.pi/extensions/fm-primary-turnend-guard.ts" \
+    FM_HOME="$fixture" FM_ROOT_OVERRIDE="$fixture" \
+    node --input-type=module 2>&1 <<'JS'
+import { pathToFileURL } from "node:url";
+const handlers = new Map();
+const pi = { on(event, handler) { handlers.set(event, handler); }, sendMessage() {} };
+const extension = await import(pathToFileURL(process.env.EXT).href);
+extension.default(pi);
+const toolCall = handlers.get("tool_call");
+const run = async (toolName, command) => {
+  const result = await toolCall({ type: "tool_call", toolName, input: { command } });
+  return result?.block ? `blocked:${result.reason}` : "ran";
+};
+console.log(JSON.stringify({
+  incident: await run("bash", "git push origin --delete rtc/s7-candidate"),
+  gated: await run("bash", "git clean -fdx"),
+  recovery: await run("bash", "git push origin 66ad57f52d:refs/heads/rtc/s7-candidate"),
+  unrelated: await run("bash", "ls -la"),
+  otherTool: await run("read", "git push origin --delete rtc/s7-candidate"),
+}));
+JS
+  ) ) || rc=$?
+  expect_code 0 "$rc" "the Pi extension harness must run: $out"
+  printf '%s' "$out" | jq -e '
+    (.incident | startswith("blocked:") and contains("[destructive-push]"))
+    and (.gated | startswith("blocked:") and contains("[destructive-git-history]"))
+    and .recovery == "ran" and .unrelated == "ran" and .otherTool == "ran"' >/dev/null 2>&1 \
+    || fail "Pi extension did not block the denied commands from its tool_call handler: $out"
+  pass "destructive-guard: the Pi extension returns block=true from tool_call on a denied bash command"
 }
 
 test_claude_and_cursor_pass_their_own_rendering_flag() {
@@ -511,5 +629,7 @@ test_fail_open_missing_jq_on_stdin
 test_prefilter_skips_node_without_rm_or_git_substring
 test_policy_cli_direct
 test_every_documented_harness_is_wired
+test_opencode_plugin_blocks_a_denied_command
+test_pi_extension_blocks_a_denied_command
 test_claude_and_cursor_pass_their_own_rendering_flag
 test_scripts_are_shellcheck_clean

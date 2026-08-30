@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 
 const REASONS = {
   "persistent-cd":
-    "a persistent top-level directory change in the primary firstmate checkout is blocked; it would move the shell out of the home so a later firstmate-owned command runs inside a project clone. Reach the target without moving the shell - use git -C <dir> or an absolute path on the command itself - or scope the cd to a subshell like (cd <dir> && ...).",
+    "a persistent top-level directory change in the primary firstmate checkout is blocked; it would move the shell out of the home so a later firstmate-owned command runs inside a project clone. Reach the target without moving the shell - use git -C <dir>, make -C <dir>, or an absolute path on the command itself. A subshell (cd <dir> && ...) also avoids the move, but it hides the command inside it from the other PreToolUse seatbelts, so prefer the -C form.",
 };
 
 // Directory-changing builtins that mutate the calling shell's own cwd.

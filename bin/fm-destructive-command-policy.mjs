@@ -20,8 +20,10 @@
 //
 // Denied classes:
 //   rm      recursive AND force (flags in any order, clustered or separate)
-//           with an operand naming a pool worktree, a path whose final
-//           component is .git, or a projects/ clone path.
+//           with an operand naming a pool worktree, a path carrying a .git
+//           component, or a projects/ clone path, or - when the current
+//           directory is itself inside a clone or pool - an operand that
+//           resolves to that directory or one of its ancestors.
 //   git push  carrying a delete flag, a force flag (both long or short), a
 //           refspec beginning with ':', or a plus-prefixed refspec, against any
 //           remote. A plain <sha>:refs/heads/<name> push is ALLOWED: that is the
@@ -38,7 +40,7 @@ import path from "node:path";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { Lexer, splitProgram, commandPosition } from "./fm-arm-command-policy.mjs";
+import { Lexer, splitProgram, commandPosition, withoutLeadingKeywords } from "./fm-arm-command-policy.mjs";
 
 const ESCAPE = "Launch the session with FM_ALLOW_DESTRUCTIVE=1 for a deliberate, authorized exception.";
 
@@ -141,7 +143,7 @@ function isProtectedRemovalTarget(value) {
   const parts = pathComponents(value);
   if (parts.length === 0) return false;
   if (parts.includes(POOL_COMPONENT)) return true;
-  if (parts.at(-1) === ".git") return true;
+  if (parts.includes(".git")) return true;
   return parts.includes(CLONE_COMPONENT);
 }
 
@@ -154,12 +156,24 @@ function insideCloneOrPool(directory) {
   return at !== -1 && at < parts.length - 1;
 }
 
-function removalDestroys(words) {
+// An operand naming no fleet path of its own still destroys the checkout when it
+// resolves to the directory the command runs in, or to an ancestor of it, and
+// that directory sits in a clone or pool: `rm -rf .` and `rm -rf ..` are the
+// shapes. Resolution is deliberately limited to self-or-ancestor, because
+// resolving every operand would deny an ordinary `rm -rf build` there too.
+function removesOwnDirectory(value, cwd) {
+  const resolved = path.resolve(cwd, value);
+  const directory = path.resolve(cwd);
+  return directory === resolved || directory.startsWith(`${resolved}${path.sep}`);
+}
+
+function removalDestroys(words, cwd) {
   const { options, operands } = splitArguments(words);
   const recursive = options.some(isRecursiveOption);
   const force = options.some(isForceOption);
   if (!recursive || !force) return false;
-  return operands.some(isProtectedRemovalTarget);
+  if (operands.some(isProtectedRemovalTarget)) return true;
+  return insideCloneOrPool(cwd) && operands.some((operand) => removesOwnDirectory(operand, cwd));
 }
 
 // Resolve git's global options to the subcommand, the effective directory after
@@ -221,13 +235,15 @@ function decision(command, cwd) {
     // contributes no command word for quoted data, comments, substitutions, or
     // subshell and brace groups - which is exactly what keeps a command that
     // merely mentions these patterns in an argument from matching.
-    const position = commandPosition(node);
+    // withoutLeadingKeywords drops the reserved word a loop or conditional puts
+    // in front of its body, so `do git push --delete ...` classifies as a push.
+    const position = commandPosition(withoutLeadingKeywords(node));
     if (!position.command) continue;
     const words = position.words.slice(position.index + 1);
     const name = basename(position.command.value);
 
     if (name === "rm") {
-      if (removalDestroys(words)) return deny("destructive-rm");
+      if (removalDestroys(words, cwd)) return deny("destructive-rm");
       continue;
     }
     if (name !== "git") continue;

@@ -69,7 +69,9 @@ Every deny carries one stable code in square brackets before its prose reason.
 | --- | --- |
 | `persistent-cd` | A top-level `cd`/`pushd`/`popd` would persistently change the primary shell's own working directory. |
 
-The reason directs the caller to reach the target without moving the shell by using `git -C <dir>`, placing an absolute path on the intended command itself, or scoping the `cd` to a subshell.
+The reason directs the caller to reach the target without moving the shell by using `git -C <dir>`, `make -C <dir>`, or an absolute path on the intended command itself.
+It names the subshell form second and qualified, because a subshell contributes no top-level command word, so the sibling destructive-command seatbelt ([`destructive-guard.md`](destructive-guard.md)) cannot classify what runs inside one.
+Recommending it unqualified would have steered a blocked agent into that guard's documented blind spot; the `-C` forms stay classifiable and are what the reason recommends first.
 It does not permit `cd /home/project`, because an absolute-path `cd` remains a persistent directory change and is denied.
 
 ## Transport and fail-open behavior

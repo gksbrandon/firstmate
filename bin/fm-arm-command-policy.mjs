@@ -7,9 +7,11 @@
 //
 // This file is the sole owner of firstmate's shell command classification.
 // The tokenizer and command-position analysis (Lexer, splitProgram,
-// commandPosition) are exported so the sibling cd-guard policy
-// (bin/fm-cd-command-policy.mjs) reuses the same proven parser instead of
-// duplicating shell lexing; see docs/cd-guard.md. The watcher-arm decision
+// commandPosition, SHELL_KEYWORDS, withoutLeadingKeywords) are exported so the
+// sibling cd-guard and destructive-command policies
+// (bin/fm-cd-command-policy.mjs, bin/fm-destructive-command-policy.mjs) reuse
+// the same proven parser instead of duplicating shell lexing; see
+// docs/cd-guard.md and docs/destructive-guard.md. The watcher-arm decision
 // procedure below stays private to this file. The CLI entry point at the bottom
 // runs only when this module is invoked directly, never on import.
 
@@ -542,6 +544,29 @@ function consumeWrapperOptions(name, words, index) {
   return { index: next, unresolved: false, embeddedPayloads };
 }
 
+// Shell reserved words that open or continue a compound command. A node that
+// starts with one carries a compound grammar this classifier does not model, so
+// the watcher-arm decision treats it as unsupported while the sibling guards use
+// withoutLeadingKeywords to reach the command the compound actually runs.
+export const SHELL_KEYWORDS = new Set([
+  "if", "then", "else", "elif", "fi", "for", "while", "until", "case", "esac",
+  "do", "done", "function", "time", "coproc",
+]);
+
+// The same node with its leading reserved words removed, so `do git push ...`
+// and `time git push ...` present the command that really executes. Consumers
+// that only classify the executed command word need this; a consumer that must
+// reject unmodelled grammar outright uses SHELL_KEYWORDS directly.
+export function withoutLeadingKeywords(tokens) {
+  let start = 0;
+  while (start < tokens.length) {
+    const token = tokens[start];
+    if (token.type !== "word" || !SHELL_KEYWORDS.has(basename(token.value))) break;
+    start += 1;
+  }
+  return start === 0 ? tokens : tokens.slice(start);
+}
+
 export function commandPosition(tokens) {
   const words = wordsInNode(tokens);
   let index = 0;
@@ -752,7 +777,7 @@ function analyzeProgram(command, context, depth = 0) {
     const position = commandPosition(tokens);
     const nodeContext = contextWithAssignments(activeContext, position.words);
     const firstName = basename(position.words[0]?.value || "");
-    if (["if", "then", "else", "elif", "fi", "for", "while", "until", "case", "esac", "do", "done", "function", "time", "coproc"].includes(firstName)) {
+    if (SHELL_KEYWORDS.has(firstName)) {
       unsupported = true;
     }
 

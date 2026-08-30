@@ -39,17 +39,27 @@ The guard fires in any firstmate checkout, primary or task worktree, and is a si
 This is a deliberate difference from the cd-guard, which is inert outside a plain primary checkout.
 A stray persistent `cd` only harms the primary's own shell, but deleting a colleague's branch or destroying a held worktree is not a primary-only hazard, and the pool worktree named in the first incident is exactly where a crewmate or scout runs.
 
-The gated git class is scoped by the directory test below rather than by checkout shape, so a crewmate working in its own task worktree is still covered.
+The removal and push classes therefore apply in every firstmate checkout, including a crewmate's or a scout's task worktree.
+
+The gated git class is narrower, because it is scoped by the path test below rather than by checkout shape.
+It covers a `.treehouse` pool worktree and a `projects/` clone, which is where the fleet keeps work no remote holds.
+A task worktree whose path carries neither component - an Orca-managed worktree, or a gate worktree under `.no-mistakes/worktrees/` - is a firstmate checkout where the removal and push classes still fire but `git reset --hard`, `git clean` and `git branch -D` are allowed.
+That is the deliberate consequence of a directory gate that is pure path arithmetic and never reads the filesystem, and it is stated here so the gate's reach is not overclaimed.
 
 ## Denied classes
 
 Every class below denies only when the command word is the real executed command.
 
 **Recursive forced removal.**
-An `rm` carrying both a recursive and a force flag, in any order and whether clustered or separate, with at least one operand naming a `.treehouse` pool path, a path whose final component is `.git`, or a path with a `projects` component.
+An `rm` carrying both a recursive and a force flag, in any order and whether clustered or separate, with at least one operand naming a `.treehouse` pool path, a path with a `.git` component, or a path with a `projects` component.
 Both flags are required, so `rm -r <clone-path>` and `rm -f <clone-path>` are allowed; a removal that is neither recursive nor forced cannot silently destroy a tree.
 Path matching is on whole path components, so `my-projects/build` is not a `projects/` path.
-An operand that is still a variable is matched on the bytes present, so `rm -rf "$WORKTREE/.git"` is denied on its `.git` final component.
+An operand that is still a variable is matched on the bytes present, so `rm -rf "$WORKTREE/.git"` is denied on its `.git` component.
+The `.git` component is matched anywhere in the path rather than only at the end, so `rm -rf .git/*`, whose final component the shell leaves as a glob, is denied like `rm -rf .git`.
+
+An operand that names no fleet path of its own is resolved against the current directory in exactly one case: when that directory is itself inside a clone or a pool and the operand resolves to it or to an ancestor of it.
+`rm -rf .` and `rm -rf ..` from inside a pool worktree destroy that checkout as surely as naming its path, so they are denied there.
+Resolution stops at self-or-ancestor on purpose, because resolving every operand would deny an ordinary `rm -rf build` inside a pool worktree too.
 
 **A push that deletes or force-updates a remote ref.**
 A `git push` carrying a delete flag, a force flag (both in long or short form, including `--force-with-lease` and git's own unambiguous long-option abbreviations), a refspec beginning with `:`, or a plus-prefixed refspec, against any remote.
@@ -66,11 +76,17 @@ Outside a clone or pool these four verbs are allowed, which keeps the class poin
 `git branch -d` without a force flag is allowed, because git itself refuses it for unmerged work.
 `git clean` and `git filter-branch` are denied in any form, including a `--dry-run` probe, rather than modelling each tool's own safety flags for a rare case the escape hatch already covers.
 
+**Every class sees through a loop or a conditional.**
+A node that begins with a shell reserved word - `do`, `then`, `else`, `time`, and the rest - is classified on the command that word introduces, so `for b in $stale; do git push origin --delete $b; done` is denied exactly like the bare push.
+Bulk branch cleanup in a loop is the shape the second incident would most naturally have taken at scale, so leaving it unclassified would have left the guard's own scenario open.
+The reserved-word list is `SHELL_KEYWORDS` in `bin/fm-arm-command-policy.mjs`, which is also what that file's own classifier uses to mark a compound node unsupported; both consumers read the one list rather than each deriving it.
+
 ## Accepted non-goals
 
 Consistent with the agent-mistake threat model this family shares, the guard does not chase obfuscated bypasses.
 
-- A destructive command reached only through a subshell `( ... )`, a brace group, a command substitution, a nested `bash -c` payload, or `xargs` is not classified. The classifier contributes no top-level command word for those, the same boundary `docs/cd-guard.md` records.
+- A destructive command reached only through a subshell `( ... )`, a brace group, a command substitution, a nested `bash -c` payload, or `xargs` is not classified. The classifier contributes no top-level command word for those, the same boundary `docs/cd-guard.md` records. Because that is a real gap rather than a theoretical one, the cd-guard's deny message no longer recommends a subshell unqualified; it recommends `git -C <dir>` first and says plainly that a subshell hides its contents from this guard. A guard in this family must not route an agent it just blocked into a sibling's blind spot.
+- A leading `!` negation is not a reserved word this guard strips, so `! git push --delete ...` is unclassified. It inverts the exit status of a command whose result nothing reads, so it is an obfuscation shape rather than an agent mistake.
 - Malformed or untokenizable syntax fails open (allow), matching the cd-guard rather than the watcher-arm seatbelt. Both incident commands tokenize cleanly, so zero false blocks is worth more here than catching deliberately malformed input.
 - `--git-dir` and `--work-tree` are not treated as directory redirection for the gated class; only `-C` and the current directory are.
 - The current directory the policy reads is the hook process's, which is the session directory rather than the tool shell's own cwd if an earlier command moved it. In a primary the cd-guard already prevents that drift, and the `-C` form is classified exactly.
@@ -112,7 +128,7 @@ Two things are specific to this guard.
 
 ## Shared classifier ownership
 
-`bin/fm-destructive-command-policy.mjs` imports the shell tokenizer and command-position analysis (`Lexer`, `splitProgram`, `commandPosition`) from `bin/fm-arm-command-policy.mjs`, the sole owner of firstmate's shell classification, exactly as the cd policy does.
+`bin/fm-destructive-command-policy.mjs` imports the shell tokenizer, command-position analysis, and reserved-word handling (`Lexer`, `splitProgram`, `commandPosition`, `withoutLeadingKeywords`) from `bin/fm-arm-command-policy.mjs`, the sole owner of firstmate's shell classification, exactly as the cd policy does.
 This guard never duplicates shell lexing; it adds only the destructive-command decision on top of that shared classifier.
 Reusing that parser is what makes the structural, non-prose classification cheap enough to be the default.
 
@@ -135,7 +151,7 @@ The OpenCode plugin runs the checker in the session directory so the gated class
 
 `tests/fm-destructive-pretool-check.test.sh` owns the acceptance matrix and is registered in the `pure-contract-unit` family in `bin/fm-test-run.sh`.
 Every deny and allow case runs through Codex-shaped stdin, Claude-shaped stdin, Grok-shaped stdin, OpenCode-shaped CLI, and Pi-shaped CLI entry forms.
-The suite covers both 2026-08-30 incident commands; the branch-restoring `<sha>:refs/heads/<name>` recovery push; the prose and data near-misses a substring guard blocks; the directory gate and its `-C` override; the escape hatch including its fail-closed values; the deny message naming that hatch; the task-worktree scope difference from the cd-guard; the Cursor rendering and the duplicate-registration suppression that keeps the Claude-settings copy from re-classifying a Cursor payload; an end-to-end regression that first reproduces the worktree detachment and then denies the exact command; the fail-open transport behavior; the prefilter fast path; the policy CLI contract; and the per-harness registration.
+The suite covers both 2026-08-30 incident commands; the branch-restoring `<sha>:refs/heads/<name>` recovery push; the prose and data near-misses a substring guard blocks; the loop and conditional bodies each class is classified through, with the loop headers they must not match; the self-or-ancestor removal rule and the ordinary `rm -rf build` it must not catch; the directory gate and its `-C` override; the escape hatch including its fail-closed values; the deny message naming that hatch; the task-worktree scope difference from the cd-guard; the Cursor rendering and the duplicate-registration suppression that keeps the Claude-settings copy from re-classifying a Cursor payload; an end-to-end regression that first reproduces the worktree detachment and then denies the exact command; the fail-open transport behavior; the prefilter fast path; the policy CLI contract; and the per-harness registration, with the OpenCode plugin and the Pi extension driven through their real handlers rather than read as source.
 
 `tests/fm-brief.test.sh` covers the companion scaffold rule that makes a colleague's branch, merge request, deployment, ticket, or thread read-only in generated ship and scout briefs unless the brief authorizes the exact mutation.
 
