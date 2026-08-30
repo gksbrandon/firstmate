@@ -5,8 +5,8 @@ This document is the authoritative human-readable contract for the cd-guard PreT
 `bin/fm-cd-pretool-check.sh` is the stable harness transport, primary-checkout scope, and output renderer.
 The tracked harness adapters forward command text without classifying it.
 
-It is the third member of a family of primary-session guards that share the same cross-harness hook machinery:
-the watcher-arm PreToolUse seatbelt (`bin/fm-arm-pretool-check.sh`, `docs/arm-pretool-check.md`) and the turn-end supervision guard (`bin/fm-turnend-guard.sh`, `docs/turnend-guard.md`).
+It is the third member of a family of session guards that share the same cross-harness hook machinery:
+the watcher-arm PreToolUse seatbelt (`bin/fm-arm-pretool-check.sh`, `docs/arm-pretool-check.md`), the turn-end supervision guard (`bin/fm-turnend-guard.sh`, `docs/turnend-guard.md`), and the destructive-command seatbelt (`bin/fm-destructive-pretool-check.sh`, `docs/destructive-guard.md`), which deliberately stays armed in task worktrees this guard is inert in.
 
 ## Purpose and boundary
 
