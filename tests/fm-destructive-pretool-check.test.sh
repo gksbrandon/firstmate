@@ -95,6 +95,10 @@ matrix_case R12 deny neutral destructive-rm 'rm -rf "$WORKTREE/.git/objects"'
 matrix_case R13 deny pool destructive-rm 'rm -rf .'
 matrix_case R14 deny clone destructive-rm 'rm -rf ..'
 matrix_case R15 deny pool destructive-rm 'rm -rf ./'
+# The filesystem root is an ancestor like any other. It is the case a naive
+# `${resolved}${path.sep}` prefix silently exempts, by building `//`.
+matrix_case R16 deny pool destructive-rm 'rm -rf /'
+matrix_case R17 deny clone destructive-rm 'rm -rf /'
 
 # ALLOW: a removal that is not both recursive and forced, or not a fleet path.
 matrix_case r01 allow neutral '' 'rm -rf build'
@@ -110,6 +114,10 @@ matrix_case r08 allow pool '' 'rm -rf build'
 matrix_case r09 allow clone '' 'rm -rf node_modules/.cache'
 # Outside a clone or pool the resolved rule does not apply at all.
 matrix_case r10 allow neutral '' 'rm -rf .'
+# An empty word names no path, and resolving it would read as the current
+# directory; the real rm removes nothing here.
+matrix_case r11 allow pool '' 'rm -rf ""'
+matrix_case r12 allow clone '' 'rm -rf ""'
 
 # DENY: a push that deletes or force-updates a remote ref, against any remote.
 matrix_case P01 deny neutral destructive-push 'git push origin --delete rtc/s7-candidate'
@@ -258,6 +266,31 @@ test_full_acceptance_matrix() {
     done
   done
   pass "destructive-guard acceptance matrix: ${#MATRIX_IDS[@]} cases x 5 harness entry forms, deny/allow all correct"
+}
+
+# --- the ancestor rule reaches every ancestor, root included ----------------
+
+# A `..` chain deep enough to bottom out at the filesystem root is the shape a
+# fixed matrix string cannot express, because the pool fixture's depth varies
+# with the temp root. It is also the shape rm itself does not refuse: BSD rm's
+# own root check keys on the literal operand, not on where the chain lands.
+test_ancestor_removal_reaches_the_filesystem_root() {
+  local deep i out rc
+  deep=""
+  for ((i = 0; i < 40; i++)); do deep="../$deep"; done
+  rc=0
+  out=$( (cd "$POOL_CWD" && "$CHECK" --claude --command "rm -rf $deep") 2>&1) || rc=$?
+  expect_code 2 "$rc" "a .. chain that bottoms out at / is still an ancestor of the pool worktree"
+  assert_contains "$out" '[destructive-rm]' "root-ancestor deny must carry its reason code"
+  rc=0
+  out=$( (cd "$CLONE_CWD" && "$CHECK" --claude --command "rm -rf $deep") 2>&1) || rc=$?
+  expect_code 2 "$rc" "the same chain from inside a clone must deny too"
+  # The rule must not have widened: a sibling of an ancestor is not an ancestor.
+  rc=0
+  out=$( (cd "$POOL_CWD" && "$CHECK" --claude --command 'rm -rf ../sibling') 2>&1) || rc=$?
+  expect_code 0 "$rc" "a sibling directory is not an ancestor and must stay allowed"
+  [ -z "$out" ] || fail "sibling removal produced output: $out"
+  pass "destructive-guard: the self-or-ancestor removal rule includes the filesystem root and stops at ancestors"
 }
 
 # --- the directory gate is what separates the gated git class ---------------
@@ -613,6 +646,7 @@ test_scripts_are_shellcheck_clean() {
 }
 
 test_full_acceptance_matrix
+test_ancestor_removal_reaches_the_filesystem_root
 test_gated_class_turns_only_on_the_effective_directory
 test_dash_c_target_overrides_the_working_directory
 test_escape_hatch_releases_only_on_the_exact_value

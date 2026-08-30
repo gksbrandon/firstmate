@@ -59,6 +59,8 @@ The `.git` component is matched anywhere in the path rather than only at the end
 
 An operand that names no fleet path of its own is resolved against the current directory in exactly one case: when that directory is itself inside a clone or a pool and the operand resolves to it or to an ancestor of it.
 `rm -rf .` and `rm -rf ..` from inside a pool worktree destroy that checkout as surely as naming its path, so they are denied there.
+Every ancestor counts, the filesystem root included, so a `..` chain long enough to bottom out at `/` is denied like a short one.
+An empty operand is not a target at all: it names no path, and the real `rm` removes nothing for it.
 Resolution stops at self-or-ancestor on purpose, because resolving every operand would deny an ordinary `rm -rf build` inside a pool worktree too.
 
 **A push that deletes or force-updates a remote ref.**

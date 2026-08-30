@@ -159,12 +159,16 @@ function insideCloneOrPool(directory) {
 // An operand naming no fleet path of its own still destroys the checkout when it
 // resolves to the directory the command runs in, or to an ancestor of it, and
 // that directory sits in a clone or pool: `rm -rf .` and `rm -rf ..` are the
-// shapes. Resolution is deliberately limited to self-or-ancestor, because
-// resolving every operand would deny an ordinary `rm -rf build` there too.
+// shapes. The filesystem root is an ancestor like any other, so the prefix is
+// normalized rather than concatenated - `/` + `/` would never match. Resolution
+// is deliberately limited to self-or-ancestor, because resolving every operand
+// would deny an ordinary `rm -rf build` there too.
 function removesOwnDirectory(value, cwd) {
   const resolved = path.resolve(cwd, value);
   const directory = path.resolve(cwd);
-  return directory === resolved || directory.startsWith(`${resolved}${path.sep}`);
+  if (directory === resolved) return true;
+  const prefix = resolved.endsWith(path.sep) ? resolved : `${resolved}${path.sep}`;
+  return directory.startsWith(prefix);
 }
 
 function removalDestroys(words, cwd) {
@@ -172,8 +176,11 @@ function removalDestroys(words, cwd) {
   const recursive = options.some(isRecursiveOption);
   const force = options.some(isForceOption);
   if (!recursive || !force) return false;
-  if (operands.some(isProtectedRemovalTarget)) return true;
-  return insideCloneOrPool(cwd) && operands.some((operand) => removesOwnDirectory(operand, cwd));
+  // An empty word names no path at all, and path.resolve would read it as the
+  // current directory. Both operand rules agree it is not a target.
+  const targets = operands.filter((operand) => operand !== "");
+  if (targets.some(isProtectedRemovalTarget)) return true;
+  return insideCloneOrPool(cwd) && targets.some((target) => removesOwnDirectory(target, cwd));
 }
 
 // Resolve git's global options to the subcommand, the effective directory after
