@@ -1,0 +1,17 @@
+Live-e2e lab reproduction: the stub set tests/fm-sessionstart-hook-live-e2e.test.sh builds,
+plus the real .claude/settings.json it copies verbatim. Each tracked hook command is executed
+with CLAUDE_PROJECT_DIR pointed at the lab and a Bash PreToolUse payload on stdin.
+Exit 126/127 = the entry execs a path the lab does not have (the defect the round-4 fix closed).
+
+stubbed in the lab: fm-arm-pretool-check.sh fm-cd-pretool-check.sh fm-claude-stop-autoarm.sh fm-destructive-pretool-check.sh fm-subagent-pretool-check.sh fm-turnend-guard.sh 
+
+SessionStart   fm-sessionstart-run.sh             ok (exit 0)
+PreToolUse     fm-arm-pretool-check.sh            ok (exit 0)
+PreToolUse     fm-cd-pretool-check.sh             ok (exit 0)
+PreToolUse     fm-destructive-pretool-check.sh    ok (exit 0)
+PreToolUse     fm-subagent-pretool-check.sh       ok (exit 0)
+Stop           fm-turnend-guard.sh                ok (exit 0)
+Stop           fm-claude-stop-autoarm.sh          ok (exit 0)
+
+Control: the same lab WITHOUT the destructive stub (the pre-fix state)
+PreToolUse     fm-destructive-pretool-check.sh    exit 127 (every Bash call in the lab would fail this way)
