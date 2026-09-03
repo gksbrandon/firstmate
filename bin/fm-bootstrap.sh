@@ -902,9 +902,11 @@ tool_version_line() {  # <tool>
   printf '%s\n' "$output" | grep -m 1 -v '^[[:space:]]*$'
 }
 
-# What that line calls the build, for disclosing a version no floor check can
-# read: the token after a "<tool> version " label, or the whole line when the
-# tool labels its version some other way.
+# The build that line names: the token after a "<tool> version " label, or the
+# whole line when the tool labels its version some other way. Both the floor
+# parse and the disclosure of a version no floor check can read start here, so a
+# release number sitting elsewhere on the line - an "update available" nag - is
+# never read as the installed build's own version.
 tool_version_token() {  # <tool>
   local tool=$1 line stripped
   line=$(tool_version_line "$tool") || return 1
@@ -913,18 +915,20 @@ tool_version_token() {  # <tool>
   printf '%s\n' "${stripped%% *}"
 }
 
-# Shared semantic-version floor for the tool gates below. Returns 0 at or above
-# the floor, 2 when the tool is installed but its version line carries no
+# Shared semantic-version floor for the tool gates below. The version compared is
+# the FIRST major.minor.patch in the build tool_version_token isolates, so a later
+# release number that follows the real one decides nothing. Returns 0 at or above
+# the floor, 2 when the tool is installed but that build carries no
 # major.minor.patch triple at all, and 1 for everything else, including a build
 # genuinely below the floor. A caller that treats every non-zero return as an
 # upgrade prompt keeps that verdict: a development or vendored build never passes
 # a floor it was never checked against. Only a caller that inspects 2 on its own
 # can accept such a build as present.
 tool_version_at_least() {  # <tool> <min-version>
-  local tool=$1 min=$2 line parts major minor patch extra
+  local tool=$1 min=$2 token parts major minor patch extra
   local min_major min_minor min_patch min_extra
-  line=$(tool_version_line "$tool") || return 1
-  parts=$(printf '%s\n' "$line" | sed -nE 's/.*[vV]?([0-9]+)\.([0-9]+)\.([0-9]+).*/\1 \2 \3/p')
+  token=$(tool_version_token "$tool") || return 1
+  parts=$(printf '%s\n' "$token" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 | tr . ' ')
   IFS=' ' read -r major minor patch extra <<< "$parts"
   [ -n "$major" ] && [ -n "$minor" ] && [ -n "$patch" ] && [ -z "$extra" ] || return 2
   IFS='.' read -r min_major min_minor min_patch min_extra <<< "$min"

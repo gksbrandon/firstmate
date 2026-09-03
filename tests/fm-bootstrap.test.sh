@@ -317,8 +317,9 @@ ROWS
 # no readable major.minor.patch there - the captain's fork, built from a git
 # checkout, is stamped 0-unstable-<sha> - is installed and usable, so it reports
 # no MISSING line and discloses the unchecked floor only as a verbose fact. A
-# later version number on any following line (an update nag) is never the
-# installed build's own version and can never satisfy the floor.
+# later version number that sits on a following line (an update nag) or after the
+# real version on the version line itself is never the installed build's own
+# version and can never satisfy the floor.
 test_no_mistakes_min_version() {
   local label version extra token mode case_dir fakebin out verbose missing info n
   missing='MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)'
@@ -360,6 +361,8 @@ newer no-mistakes major is accepted^no-mistakes version v2.0.0 (fake)^^^empty
 older no-mistakes patch reports an upgrade^no-mistakes version v1.31.1 (fake)^^^missing
 older no-mistakes minor reports an upgrade^no-mistakes version 1.30.0^^^missing
 an update nag never lifts an older build over the floor^no-mistakes version 1.30.0^A new version of no-mistakes is available: 1.30.0 -> v1.60.2^^missing
+a same-line update nag never lifts an older build over the floor^no-mistakes version 1.30.0 (update available 1.60.2)^^^missing
+a same-line older release never drags an at-floor build under it^no-mistakes version 1.31.2 (previous 1.30.0)^^^empty
 the captain's fork build is present, not missing^no-mistakes version v0-unstable-9f4698d (9f4698d) unknown^^v0-unstable-9f4698d^unverifiable
 an update nag after an unreadable version never satisfies the floor^no-mistakes version v0-unstable-9f4698d (9f4698d) unknown^A new version of no-mistakes is available: v0-unstable-9f4698d -> v1.60.2^v0-unstable-9f4698d^unverifiable
 an unlabelled development build is present, not missing^no-mistakes development build^^no-mistakes development build^unverifiable
