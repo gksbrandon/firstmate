@@ -141,7 +141,7 @@ Two things are specific to this guard.
 
 ## Shared classifier ownership
 
-`bin/fm-destructive-command-policy.mjs` imports the shell tokenizer, command-position analysis, and reserved-word handling (`Lexer`, `splitProgram`, `commandPosition`, `withoutLeadingKeywords`) from `bin/fm-arm-command-policy.mjs`, the sole owner of firstmate's shell classification, exactly as the cd policy does.
+`bin/fm-destructive-command-policy.mjs` imports the shell tokenizer, command-position analysis, reserved-word handling, and the directory-changing builtin set (`Lexer`, `splitProgram`, `commandPosition`, `withoutLeadingKeywords`, `CD_BUILTINS`) from `bin/fm-arm-command-policy.mjs`, the sole owner of firstmate's shell classification, exactly as the cd policy does.
 This guard never duplicates shell lexing; it adds only the destructive-command decision on top of that shared classifier.
 Reusing that parser is what makes the structural, non-prose classification cheap enough to be the default.
 

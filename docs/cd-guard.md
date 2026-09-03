@@ -106,10 +106,11 @@ Identical in shape to `docs/arm-pretool-check.md`:
 
 ## Shared classifier ownership
 
-`bin/fm-cd-command-policy.mjs` imports the shell tokenizer and command-position analysis (`Lexer`, `splitProgram`, `commandPosition`) from `bin/fm-arm-command-policy.mjs`, the sole owner of firstmate's shell classification.
+`bin/fm-cd-command-policy.mjs` imports the shell tokenizer, command-position analysis, and the directory-changing builtin set (`Lexer`, `splitProgram`, `commandPosition`, `CD_BUILTINS`) from `bin/fm-arm-command-policy.mjs`, the sole owner of firstmate's shell classification.
+`CD_BUILTINS` lives in that owner rather than here because the destructive-command seatbelt ([`destructive-guard.md`](destructive-guard.md)) reads the same set.
 `basename` remains a private helper of the shared arm classifier because the cd policy identifies shell builtins by exact cooked-word identity.
 The cd-guard never duplicates shell lexing; it adds only the cd-specific decision on top of that shared classifier.
-`bin/fm-arm-command-policy.mjs` runs its own CLI entry point only when invoked directly, never on import, so the two policies stay independent CLIs over one parser.
+`bin/fm-arm-command-policy.mjs` runs its own CLI entry point only when invoked directly, never on import, so each policy stays an independent CLI over one parser.
 
 ## Harness wiring
 
@@ -122,7 +123,7 @@ The cd-guard never duplicates shell lexing; it adds only the cd-specific decisio
 | Pi | `.pi/extensions/fm-primary-turnend-guard.ts` `tool_call` handler | Returns `{block: true}`; piggybacks on the already-loaded primary extension so no extra `-e` flag is needed. |
 | Cursor | `.cursor/hooks.json` `preToolUse` hook matching `tool_name` `Shell`, forwarding stdin with `--cursor` | Prints Cursor's own `{"permission":"deny","user_message":...}` object on stdout and exits 0, because Cursor reads the returned object rather than the exit status. Without `--cursor` the Cursor-delivered payload is the Claude-settings duplicate Cursor also loads, and allows; `docs/arm-pretool-check.md` owns that shared predicate. |
 
-Each harness runs the cd-guard alongside the watcher-arm seatbelt; the two are independent checks, and either deny blocks the command.
+Each harness runs the cd-guard alongside the watcher-arm and destructive-command seatbelts; the three are independent checks, and any deny blocks the command.
 Every shell variable reference in the Grok hook command carries an inline default (`${GROK_WORKSPACE_ROOT:-}`) because Grok expands the raw hook command before `bash -lc` runs it, the same requirement documented in `docs/arm-pretool-check.md`.
 
 ## Automated validation
