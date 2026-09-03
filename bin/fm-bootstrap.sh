@@ -50,8 +50,13 @@
 #          landed in the primary instead of its own worktree; restore it per the line.
 #          treehouse is also MISSING when its installed version lacks
 #          "treehouse get --lease" support.
-#          no-mistakes is also MISSING when its installed version is older than
-#          1.31.2.
+#          no-mistakes is also MISSING when its installed version line reports a
+#          version older than 1.31.2. An installed build whose version line
+#          carries no readable major.minor.patch at all (a development or
+#          vendored build) is PRESENT: it prints no MISSING line, and discloses
+#          the unchecked floor only as a
+#          "BOOTSTRAP_INFO: no-mistakes version unverifiable (<version>); floor
+#          <min> not checked" fact under FM_BOOTSTRAP_VERBOSE_FACTS=1.
 #          The AXI-family floor policy is owned beside GH_AXI_MIN and
 #          LAVISH_AXI_MIN below; the per-tool owners point there. An installed
 #          build below its floor reports MISSING like no-mistakes, so the operator
@@ -887,18 +892,45 @@ treehouse_supports_lease() {
   treehouse get --help 2>&1 | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)'
 }
 
-# Shared semantic-version floor for the tool gates below. A version string that
-# cannot be parsed into exactly one major.minor.patch triple is incompatible,
-# never assumed current, so a development or vendored build cannot pass a floor
-# it was never checked against.
-tool_version_at_least() {  # <tool> <min-version>
-  local tool=$1 min=$2 output parts major minor patch extra
-  local min_major min_minor min_patch min_extra
+# The tool's own version line: the first non-empty line of its --version stdout.
+# Every later line - an update nag, a build banner - is ignored, so a version
+# number that belongs to some other release can never be read as this build's.
+tool_version_line() {  # <tool>
+  local tool=$1 output
   command -v "$tool" >/dev/null 2>&1 || return 1
   output=$("$tool" --version 2>/dev/null) || return 1
-  parts=$(printf '%s\n' "$output" | sed -nE 's/.*[vV]?([0-9]+)\.([0-9]+)\.([0-9]+).*/\1 \2 \3/p' | head -n 1)
+  printf '%s\n' "$output" | grep -m 1 -v '^[[:space:]]*$'
+}
+
+# The build that line names: the token after a "<tool> version " label, or the
+# whole line when the tool labels its version some other way. Both the floor
+# parse and the disclosure of a version no floor check can read start here, so a
+# release number sitting elsewhere on the line - an "update available" nag - is
+# never read as the installed build's own version.
+tool_version_token() {  # <tool>
+  local tool=$1 line stripped
+  line=$(tool_version_line "$tool") || return 1
+  stripped=${line#"$tool version "}
+  [ "$stripped" != "$line" ] || { printf '%s\n' "$line"; return 0; }
+  printf '%s\n' "${stripped%% *}"
+}
+
+# Shared semantic-version floor for the tool gates below. The version compared is
+# the FIRST major.minor.patch in the build tool_version_token isolates, so a later
+# release number that follows the real one decides nothing. Returns 0 at or above
+# the floor, 2 when the tool is installed but that build carries no
+# major.minor.patch triple at all, and 1 for everything else, including a build
+# genuinely below the floor. A caller that treats every non-zero return as an
+# upgrade prompt keeps that verdict: a development or vendored build never passes
+# a floor it was never checked against. Only a caller that inspects 2 on its own
+# can accept such a build as present.
+tool_version_at_least() {  # <tool> <min-version>
+  local tool=$1 min=$2 token parts major minor patch extra
+  local min_major min_minor min_patch min_extra
+  token=$(tool_version_token "$tool") || return 1
+  parts=$(printf '%s\n' "$token" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 | tr . ' ')
   IFS=' ' read -r major minor patch extra <<< "$parts"
-  [ -n "$major" ] && [ -n "$minor" ] && [ -n "$patch" ] && [ -z "$extra" ] || return 1
+  [ -n "$major" ] && [ -n "$minor" ] && [ -n "$patch" ] && [ -z "$extra" ] || return 2
   IFS='.' read -r min_major min_minor min_patch min_extra <<< "$min"
   [ -n "$min_major" ] && [ -n "$min_minor" ] && [ -n "$min_patch" ] && [ -z "$min_extra" ] || return 1
   [ "$major" -gt "$min_major" ] && return 0
@@ -1223,8 +1255,15 @@ detect_local_tools() {
     && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
     echo "MISSING: treehouse (install: $(install_cmd treehouse))"
   fi
-  if command -v no-mistakes >/dev/null 2>&1 && ! tool_version_at_least no-mistakes "$NO_MISTAKES_MIN"; then
-    echo "MISSING: no-mistakes (install: $(install_cmd no-mistakes))"
+  if command -v no-mistakes >/dev/null 2>&1; then
+    nm_floor_rc=0
+    tool_version_at_least no-mistakes "$NO_MISTAKES_MIN" || nm_floor_rc=$?
+    if [ "$nm_floor_rc" -eq 2 ]; then
+      [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" != 1 ] \
+        || echo "BOOTSTRAP_INFO: no-mistakes version unverifiable ($(tool_version_token no-mistakes)); floor $NO_MISTAKES_MIN not checked"
+    elif [ "$nm_floor_rc" -ne 0 ]; then
+      echo "MISSING: no-mistakes (install: $(install_cmd no-mistakes))"
+    fi
   fi
   if command -v gh-axi >/dev/null 2>&1 && ! tool_version_at_least gh-axi "$GH_AXI_MIN"; then
     echo "MISSING: gh-axi (install: $(install_cmd gh-axi))"
