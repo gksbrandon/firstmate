@@ -1,0 +1,21 @@
+firstmate session-start digest, BOOTSTRAP section, real installed no-mistakes on PATH
+
+$ no-mistakes --version
+no-mistakes version v0-unstable-9f4698d (9f4698d) unknown
+
+=== BEFORE  bin/fm-session-start.sh @ 61357b5 ===
+BOOTSTRAP
+--------------------------------------------------------------------------------
+MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)
+
+=== AFTER   bin/fm-session-start.sh @ cca283c ===
+BOOTSTRAP
+--------------------------------------------------------------------------------
+(silent - all good)
+
+
+=== AFTER  @ cca283c, FM_BOOTSTRAP_VERBOSE_FACTS=1 ===
+BOOTSTRAP
+--------------------------------------------------------------------------------
+BOOTSTRAP_INFO: no-mistakes version unverifiable (v0-unstable-9f4698d); floor 1.31.2 not checked
+

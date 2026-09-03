@@ -1,0 +1,16 @@
+no-mistakes floor 1.31.2   regression: fails before the fix, passes after
+
+$ no-mistakes --version
+no-mistakes version v0-unstable-9f4698d (9f4698d) unknown
+  61357b5 base           : MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)
+  ff6e229 dev-build fix   : <silent>
+  cca283c target          : <silent>
+  expected                : PRESENT (no MISSING line)
+
+$ no-mistakes --version
+no-mistakes version 1.30.0 (update available 1.60.2)
+  61357b5 base           : <silent>
+  ff6e229 dev-build fix   : <silent>
+  cca283c target          : MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)
+  expected                : MISSING (1.30.0 is below the floor; the nag must not decide)
+

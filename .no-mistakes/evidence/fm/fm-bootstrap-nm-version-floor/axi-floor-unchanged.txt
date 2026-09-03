@@ -1,0 +1,52 @@
+gh-axi floor 0.1.29 / lavish-axi floor 0.1.46   verdict: base 61357b5 vs target cca283c
+
+gh-axi --version -> 0.1.29
+lavish-axi --version -> 0.1.46
+  base   : <silent>
+  target : <silent>
+  SAME VERDICT
+
+gh-axi --version -> 0.1.35
+lavish-axi --version -> 0.1.63
+  base   : <silent>
+  target : <silent>
+  SAME VERDICT
+
+gh-axi --version -> 1.0.0
+lavish-axi --version -> 1.0.0
+  base   : <silent>
+  target : <silent>
+  SAME VERDICT
+
+gh-axi --version -> 0.1.19
+lavish-axi --version -> 0.1.45
+  base   : MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)
+MISSING: lavish-axi (install: npm install -g lavish-axi && lavish-axi setup hooks)
+  target : MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)
+MISSING: lavish-axi (install: npm install -g lavish-axi && lavish-axi setup hooks)
+  SAME VERDICT
+
+gh-axi --version -> 0.0.9
+lavish-axi --version -> 0.0.9
+  base   : MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)
+MISSING: lavish-axi (install: npm install -g lavish-axi && lavish-axi setup hooks)
+  target : MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)
+MISSING: lavish-axi (install: npm install -g lavish-axi && lavish-axi setup hooks)
+  SAME VERDICT
+
+gh-axi --version -> gh-axi development build
+lavish-axi --version -> lavish-axi development build
+  base   : MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)
+MISSING: lavish-axi (install: npm install -g lavish-axi && lavish-axi setup hooks)
+  target : MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)
+MISSING: lavish-axi (install: npm install -g lavish-axi && lavish-axi setup hooks)
+  SAME VERDICT
+
+gh-axi --version -> v0-unstable-abc1234
+lavish-axi --version -> v0-unstable-abc1234
+  base   : MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)
+MISSING: lavish-axi (install: npm install -g lavish-axi && lavish-axi setup hooks)
+  target : MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)
+MISSING: lavish-axi (install: npm install -g lavish-axi && lavish-axi setup hooks)
+  SAME VERDICT
+

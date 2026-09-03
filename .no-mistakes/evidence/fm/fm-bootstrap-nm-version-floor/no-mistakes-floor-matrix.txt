@@ -1,0 +1,82 @@
+--- at the floor
+$ no-mistakes --version
+no-mistakes version v1.31.2 (fake) 2026-06-27T00:02:18Z
+$ fm-bootstrap.sh
+<silent>
+$ FM_BOOTSTRAP_VERBOSE_FACTS=1 fm-bootstrap.sh   # no-mistakes lines only
+<none>
+
+--- at the floor, no v prefix
+$ no-mistakes --version
+no-mistakes version 1.31.2
+$ fm-bootstrap.sh
+<silent>
+$ FM_BOOTSTRAP_VERBOSE_FACTS=1 fm-bootstrap.sh   # no-mistakes lines only
+<none>
+
+--- newer than the floor
+$ no-mistakes --version
+no-mistakes version v2.0.0 (fake)
+$ fm-bootstrap.sh
+<silent>
+$ FM_BOOTSTRAP_VERBOSE_FACTS=1 fm-bootstrap.sh   # no-mistakes lines only
+<none>
+
+--- below the floor
+$ no-mistakes --version
+no-mistakes version v1.31.1 (fake)
+$ fm-bootstrap.sh
+MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)
+$ FM_BOOTSTRAP_VERBOSE_FACTS=1 fm-bootstrap.sh   # no-mistakes lines only
+MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)
+
+--- below the floor, update nag on a following line
+$ no-mistakes --version
+no-mistakes version 1.30.0
+A new version of no-mistakes is available: 1.30.0 -> v1.60.2
+$ fm-bootstrap.sh
+MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)
+$ FM_BOOTSTRAP_VERBOSE_FACTS=1 fm-bootstrap.sh   # no-mistakes lines only
+MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)
+
+--- below the floor, update nag on the SAME line
+$ no-mistakes --version
+no-mistakes version 1.30.0 (update available 1.60.2)
+$ fm-bootstrap.sh
+MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)
+$ FM_BOOTSTRAP_VERBOSE_FACTS=1 fm-bootstrap.sh   # no-mistakes lines only
+MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)
+
+--- at the floor, older release also on the line
+$ no-mistakes --version
+no-mistakes version 1.31.2 (previous 1.30.0)
+$ fm-bootstrap.sh
+<silent>
+$ FM_BOOTSTRAP_VERBOSE_FACTS=1 fm-bootstrap.sh   # no-mistakes lines only
+<none>
+
+--- dev build (captain's fork stamp)
+$ no-mistakes --version
+no-mistakes version v0-unstable-9f4698d (9f4698d) unknown
+$ fm-bootstrap.sh
+<silent>
+$ FM_BOOTSTRAP_VERBOSE_FACTS=1 fm-bootstrap.sh   # no-mistakes lines only
+BOOTSTRAP_INFO: no-mistakes version unverifiable (v0-unstable-9f4698d); floor 1.31.2 not checked
+
+--- dev build with an update nag after it
+$ no-mistakes --version
+no-mistakes version v0-unstable-9f4698d (9f4698d) unknown
+A new version of no-mistakes is available: v0-unstable-9f4698d -> v1.60.2
+$ fm-bootstrap.sh
+<silent>
+$ FM_BOOTSTRAP_VERBOSE_FACTS=1 fm-bootstrap.sh   # no-mistakes lines only
+BOOTSTRAP_INFO: no-mistakes version unverifiable (v0-unstable-9f4698d); floor 1.31.2 not checked
+
+--- unlabelled development build
+$ no-mistakes --version
+no-mistakes development build
+$ fm-bootstrap.sh
+<silent>
+$ FM_BOOTSTRAP_VERBOSE_FACTS=1 fm-bootstrap.sh   # no-mistakes lines only
+BOOTSTRAP_INFO: no-mistakes version unverifiable (no-mistakes development build); floor 1.31.2 not checked
+
