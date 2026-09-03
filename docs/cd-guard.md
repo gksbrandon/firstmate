@@ -5,8 +5,8 @@ This document is the authoritative human-readable contract for the cd-guard PreT
 `bin/fm-cd-pretool-check.sh` is the stable harness transport, primary-checkout scope, and output renderer.
 The tracked harness adapters forward command text without classifying it.
 
-It is the third member of a family of primary-session guards that share the same cross-harness hook machinery:
-the watcher-arm PreToolUse seatbelt (`bin/fm-arm-pretool-check.sh`, `docs/arm-pretool-check.md`) and the turn-end supervision guard (`bin/fm-turnend-guard.sh`, `docs/turnend-guard.md`).
+It is the third member of a family of session guards that share the same cross-harness hook machinery:
+the watcher-arm PreToolUse seatbelt (`bin/fm-arm-pretool-check.sh`, `docs/arm-pretool-check.md`), the turn-end supervision guard (`bin/fm-turnend-guard.sh`, `docs/turnend-guard.md`), and the destructive-command seatbelt (`bin/fm-destructive-pretool-check.sh`, `docs/destructive-guard.md`), which deliberately stays armed in task worktrees this guard is inert in.
 
 ## Purpose and boundary
 
@@ -69,7 +69,9 @@ Every deny carries one stable code in square brackets before its prose reason.
 | --- | --- |
 | `persistent-cd` | A top-level `cd`/`pushd`/`popd` would persistently change the primary shell's own working directory. |
 
-The reason directs the caller to reach the target without moving the shell by using `git -C <dir>`, placing an absolute path on the intended command itself, or scoping the `cd` to a subshell.
+The reason directs the caller to reach the target without moving the shell by using `git -C <dir>`, `make -C <dir>`, or an absolute path on the intended command itself.
+It names the subshell form second and qualified, because a subshell contributes no top-level command word, so the sibling destructive-command seatbelt ([`destructive-guard.md`](destructive-guard.md)) cannot classify what runs inside one.
+Recommending it unqualified would have steered a blocked agent into that guard's documented blind spot; the `-C` forms stay classifiable and are what the reason recommends first.
 It does not permit `cd /home/project`, because an absolute-path `cd` remains a persistent directory change and is denied.
 
 ## Transport and fail-open behavior
@@ -104,10 +106,11 @@ Identical in shape to `docs/arm-pretool-check.md`:
 
 ## Shared classifier ownership
 
-`bin/fm-cd-command-policy.mjs` imports the shell tokenizer and command-position analysis (`Lexer`, `splitProgram`, `commandPosition`) from `bin/fm-arm-command-policy.mjs`, the sole owner of firstmate's shell classification.
+`bin/fm-cd-command-policy.mjs` imports the shell tokenizer, command-position analysis, and the directory-changing builtin set (`Lexer`, `splitProgram`, `commandPosition`, `CD_BUILTINS`) from `bin/fm-arm-command-policy.mjs`, the sole owner of firstmate's shell classification.
+`CD_BUILTINS` lives in that owner rather than here because the destructive-command seatbelt ([`destructive-guard.md`](destructive-guard.md)) reads the same set.
 `basename` remains a private helper of the shared arm classifier because the cd policy identifies shell builtins by exact cooked-word identity.
 The cd-guard never duplicates shell lexing; it adds only the cd-specific decision on top of that shared classifier.
-`bin/fm-arm-command-policy.mjs` runs its own CLI entry point only when invoked directly, never on import, so the two policies stay independent CLIs over one parser.
+`bin/fm-arm-command-policy.mjs` runs its own CLI entry point only when invoked directly, never on import, so each policy stays an independent CLI over one parser.
 
 ## Harness wiring
 
@@ -120,7 +123,7 @@ The cd-guard never duplicates shell lexing; it adds only the cd-specific decisio
 | Pi | `.pi/extensions/fm-primary-turnend-guard.ts` `tool_call` handler | Returns `{block: true}`; piggybacks on the already-loaded primary extension so no extra `-e` flag is needed. |
 | Cursor | `.cursor/hooks.json` `preToolUse` hook matching `tool_name` `Shell`, forwarding stdin with `--cursor` | Prints Cursor's own `{"permission":"deny","user_message":...}` object on stdout and exits 0, because Cursor reads the returned object rather than the exit status. Without `--cursor` the Cursor-delivered payload is the Claude-settings duplicate Cursor also loads, and allows; `docs/arm-pretool-check.md` owns that shared predicate. |
 
-Each harness runs the cd-guard alongside the watcher-arm seatbelt; the two are independent checks, and either deny blocks the command.
+Each harness runs the cd-guard alongside the watcher-arm and destructive-command seatbelts; the three are independent checks, and any deny blocks the command.
 Every shell variable reference in the Grok hook command carries an inline default (`${GROK_WORKSPACE_ROOT:-}`) because Grok expands the raw hook command before `bash -lc` runs it, the same requirement documented in `docs/arm-pretool-check.md`.
 
 ## Automated validation

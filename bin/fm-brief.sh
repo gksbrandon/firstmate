@@ -355,6 +355,9 @@ The report is the only thing that survives, so anything worth keeping must be in
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+8. Anything a colleague owns - their branch, merge request, deployment, ticket, thread - is READ-ONLY
+   unless this brief explicitly authorizes the exact mutation, and building on a teammate's unmerged
+   work must stay additive: never delete, force-update, close, or rewrite what they own.
 
 $INBOX_SECTION
 
@@ -474,6 +477,9 @@ $RULE1
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+8. Anything a colleague owns - their branch, merge request, deployment, ticket, thread - is READ-ONLY
+   unless this brief explicitly authorizes the exact mutation, and building on a teammate's unmerged
+   work must stay additive: never delete, force-update, close, or rewrite what they own.
 
 $INBOX_SECTION
 

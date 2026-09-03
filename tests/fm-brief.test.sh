@@ -371,6 +371,27 @@ test_ship_project_memory_wording() {
   pass "fm-brief.sh: ship project-memory wording carries the AGENTS.md authoring bar"
 }
 
+# A colleague's open merge request was auto-closed on 2026-08-30 when a session
+# deleted its source branch, so both worker scaffolds carry the standing rule.
+test_teammate_surfaces_are_read_only_in_ship_and_scout() {
+  local home brief kind
+  home="$TMP_ROOT/teammate-rule-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-teammate-ship some-proj --mode no-mistakes >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-teammate-scout some-proj --scout >/dev/null 2>&1
+  for kind in ship scout; do
+    brief="$home/data/brief-teammate-$kind/brief.md"
+    assert_present "$brief" "$kind brief was not scaffolded"
+    assert_grep "their branch, merge request, deployment, ticket, thread - is READ-ONLY" "$brief" \
+      "$kind Rules lost the colleague-owned-surface rule"
+    assert_grep "unless this brief explicitly authorizes the exact mutation" "$brief" \
+      "$kind Rules lost the explicit-authorization requirement"
+    assert_grep "must stay additive: never delete, force-update, close, or rewrite what they own" "$brief" \
+      "$kind Rules lost the additive-only requirement for a teammate's unmerged work"
+  done
+  pass "fm-brief.sh: ship and scout Rules make a colleague's surfaces read-only unless explicitly authorized"
+}
+
 test_herdr_lab_contract_is_explicit_and_complete() {
   local home id brief
   home="$TMP_ROOT/herdr-lab-home"
@@ -757,6 +778,7 @@ test_delivery_flags_are_refused_where_they_do_not_apply
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
 test_ship_project_memory_wording
+test_teammate_surfaces_are_read_only_in_ship_and_scout
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path
 test_herdr_lab_omission_is_loud_for_ship_and_scout
