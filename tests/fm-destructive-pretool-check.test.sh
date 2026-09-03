@@ -52,7 +52,11 @@ POLICY="$ROOT/bin/fm-destructive-command-policy.mjs"
 NEUTRAL_CWD="$TMP_ROOT/neutral"
 POOL_CWD="$TMP_ROOT/.treehouse/pool-9/1/repo"
 CLONE_CWD="$TMP_ROOT/home/projects/FAS"
-mkdir -p "$NEUTRAL_CWD" "$POOL_CWD" "$CLONE_CWD"
+# The fleet home: the directory the primary runs in, holding the clones and the
+# pool but matching neither path shape itself. It is where a gate on those two
+# shapes would have allowed the removal that contains everything it protects.
+HOME_CWD="$TMP_ROOT/home"
+mkdir -p "$NEUTRAL_CWD" "$POOL_CWD" "$CLONE_CWD" "$HOME_CWD"
 
 # --- full cross-harness acceptance matrix ----------------------------------
 
@@ -99,6 +103,16 @@ matrix_case R15 deny pool destructive-rm 'rm -rf ./'
 # `${resolved}${path.sep}` prefix silently exempts, by building `//`.
 matrix_case R16 deny pool destructive-rm 'rm -rf /'
 matrix_case R17 deny clone destructive-rm 'rm -rf /'
+# The same rule in the fleet home. Denying `rm -rf projects` while allowing the
+# `rm -rf .` that contains it would block the narrow target and permit the wide
+# one, so the rule is not gated on the pool and clone path shapes.
+matrix_case R18 deny home destructive-rm 'rm -rf .'
+matrix_case R19 deny home destructive-rm 'rm -rf ..'
+matrix_case R20 deny home destructive-rm 'rm -rf projects'
+# A bare trailing glob names the whole directory; the hook sees it unexpanded.
+matrix_case R21 deny home destructive-rm 'rm -rf *'
+matrix_case R22 deny pool destructive-rm 'rm -rf ./*'
+matrix_case R23 deny neutral destructive-rm 'rm -rf .'
 
 # ALLOW: a removal that is not both recursive and forced, or not a fleet path.
 matrix_case r01 allow neutral '' 'rm -rf build'
@@ -112,12 +126,16 @@ matrix_case r07 allow neutral '' 'rm -rf "$TMP"'
 # inside a pool worktree or a clone is still removable.
 matrix_case r08 allow pool '' 'rm -rf build'
 matrix_case r09 allow clone '' 'rm -rf node_modules/.cache'
-# Outside a clone or pool the resolved rule does not apply at all.
-matrix_case r10 allow neutral '' 'rm -rf .'
 # An empty word names no path, and resolving it would read as the current
 # directory; the real rm removes nothing here.
-matrix_case r11 allow pool '' 'rm -rf ""'
-matrix_case r12 allow clone '' 'rm -rf ""'
+matrix_case r10 allow pool '' 'rm -rf ""'
+matrix_case r11 allow clone '' 'rm -rf ""'
+# The widened rule must stay self-or-ancestor: ordinary scoped removals from the
+# fleet home, and a glob scoped to a subdirectory, are untouched.
+matrix_case r12 allow home '' 'rm -rf build'
+matrix_case r13 allow home '' 'rm -rf node_modules'
+matrix_case r14 allow home '' 'rm -rf build/*'
+matrix_case r15 allow home '' 'rm -rf .cache/http/*'
 
 # DENY: a push that deletes or force-updates a remote ref, against any remote.
 matrix_case P01 deny neutral destructive-push 'git push origin --delete rtc/s7-candidate'
@@ -131,6 +149,13 @@ matrix_case P08 deny neutral destructive-push 'git push --del origin feature'
 matrix_case P09 deny neutral destructive-push 'git push upstream --delete feature'
 matrix_case P10 deny pool destructive-push 'git push --delete origin feature'
 matrix_case P11 deny neutral destructive-push 'git push origin :'
+# A mirror push removes every remote ref with no local counterpart and a prune
+# push removes the remote refs outside the refspec: the incident-2 outcome
+# reached by a sync or cleanup flag rather than by an explicit delete.
+matrix_case P12 deny neutral destructive-push 'git push --mirror origin'
+matrix_case P13 deny neutral destructive-push 'git push --prune origin "refs/heads/*:refs/heads/*"'
+matrix_case P14 deny neutral destructive-push 'git -C projects/FAS push --mirror backup'
+matrix_case P15 deny pool destructive-push 'git push --prune upstream main'
 
 # ALLOW: ordinary pushes. p01 is the exact recovery shape used to restore the
 # deleted branch, so it must never be blocked.
@@ -142,6 +167,12 @@ matrix_case p05 allow neutral '' 'git push origin main'
 matrix_case p06 allow neutral '' 'git push --set-upstream origin feature'
 matrix_case p07 allow neutral '' 'git push --follow-tags origin main'
 matrix_case p08 allow pool '' 'git push origin fm/task-branch'
+# Near-misses for the mirror and prune shapes. A fetch prunes only local
+# remote-tracking refs, and --porcelain is not an abbreviation of --prune.
+matrix_case p09 allow neutral '' 'git fetch --prune origin'
+matrix_case p10 allow neutral '' 'git fetch --prune --all'
+matrix_case p11 allow neutral '' 'git push --porcelain origin main'
+matrix_case p12 allow neutral '' 'git remote prune origin'
 
 # DENY: history destruction inside a project clone or a pool worktree.
 matrix_case H01 deny clone destructive-git-history 'git reset --hard HEAD~1'
@@ -183,6 +214,10 @@ matrix_case k01 allow neutral '' 'for f in one two; do echo "$f"; done'
 matrix_case k02 allow clone '' 'for b in $(git branch --list); do echo "$b"; done'
 matrix_case k03 allow neutral '' 'for d in projects/*; do git -C "$d" status; done'
 matrix_case k04 allow clone '' 'time git status'
+# A case arm is the documented limit: stripping `case` leaves the discriminant in
+# command position rather than exposing the arm body (Accepted non-goals).
+matrix_case k05 allow neutral '' 'case $x in a) git push origin --delete b ;; esac'
+matrix_case k06 allow neutral '' 'case $x in a) rm -rf projects/FAS ;; esac'
 
 # ALLOW: the command text as DATA. A guard that greps prose blocks all of these,
 # which is the false positive this structural classifier exists to avoid.
@@ -196,6 +231,9 @@ matrix_case D07 allow clone '' 'git log --grep="reset --hard"'
 matrix_case D08 allow neutral '' 'git show HEAD:bin/fm-destructive-command-policy.mjs'
 matrix_case D09 allow neutral '' $'cat <<EOF\nrm -rf projects/FAS\ngit push --delete origin x\nEOF'
 matrix_case D10 allow neutral '' 'tasks-axi add "guard git push --force in the seatbelt"'
+matrix_case D11 allow neutral '' 'grep -rn "git push --mirror" docs/'
+matrix_case D12 allow neutral '' 'git commit -m "deny a mirror push and a prune push"'
+matrix_case D13 allow home '' 'echo "rm -rf * would take the whole home"'
 
 MATRIX_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-destructive-matrix.XXXXXX")
 FM_TEST_CLEANUP_DIRS+=("$MATRIX_TMP")
@@ -205,6 +243,7 @@ cwd_for_kind() {
     neutral) printf '%s\n' "$NEUTRAL_CWD" ;;
     pool) printf '%s\n' "$POOL_CWD" ;;
     clone) printf '%s\n' "$CLONE_CWD" ;;
+    home) printf '%s\n' "$HOME_CWD" ;;
     *) fail "unknown matrix cwd kind: $1" ;;
   esac
 }

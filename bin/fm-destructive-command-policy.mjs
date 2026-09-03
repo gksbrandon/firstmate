@@ -21,13 +21,13 @@
 // Denied classes:
 //   rm      recursive AND force (flags in any order, clustered or separate)
 //           with an operand naming a pool worktree, a path carrying a .git
-//           component, or a projects/ clone path, or - when the current
-//           directory is itself inside a clone or pool - an operand that
-//           resolves to that directory or one of its ancestors.
+//           component, or a projects/ clone path, or an operand that resolves
+//           to the current directory or one of its ancestors.
 //   git push  carrying a delete flag, a force flag (both long or short), a
-//           refspec beginning with ':', or a plus-prefixed refspec, against any
-//           remote. A plain <sha>:refs/heads/<name> push is ALLOWED: that is the
-//           shape that restores a deleted branch.
+//           mirror or prune flag, a refspec beginning with ':', or a
+//           plus-prefixed refspec, against any remote. A plain
+//           <sha>:refs/heads/<name> push is ALLOWED: that is the shape that
+//           restores a deleted branch.
 //   git branch force-delete, git reset --hard, git clean, git filter-branch,
 //           when the effective directory - the -C target when present, else the
 //           cwd - resolves inside a projects/ clone or a pool worktree.
@@ -46,7 +46,7 @@ const ESCAPE = "Launch the session with FM_ALLOW_DESTRUCTIVE=1 for a deliberate,
 
 const REASONS = {
   "destructive-rm":
-    `a recursive forced removal targeting a pool worktree, a .git directory, or a projects/ clone is blocked; it destroys a checkout and any unlanded work in it. Remove the specific files instead, or retire the worktree through the owned fleet script. ${ESCAPE}`,
+    `a recursive forced removal targeting a pool worktree, a .git directory, a projects/ clone, or the current directory or one of its ancestors is blocked; it destroys a checkout and any unlanded work in it. Remove the specific files instead, or retire the worktree through the owned fleet script. ${ESCAPE}`,
   "destructive-push":
     `a push that deletes or force-updates a remote ref is blocked; one such push can destroy a colleague's branch and auto-close their open merge request. Push an ordinary fast-forward update instead - a <sha>:refs/heads/<name> refspec is allowed and is the shape that restores a deleted branch. ${ESCAPE}`,
   "destructive-git-history":
@@ -156,15 +156,20 @@ function insideCloneOrPool(directory) {
   return at !== -1 && at < parts.length - 1;
 }
 
+// A trailing bare `*` names the directory's whole contents, and the hook sees the
+// glob unexpanded, so `rm -rf *` is scoped to the directory holding it.
+function removalScope(value) {
+  return path.basename(value) === "*" ? path.dirname(value) : value;
+}
+
 // An operand naming no fleet path of its own still destroys the checkout when it
-// resolves to the directory the command runs in, or to an ancestor of it, and
-// that directory sits in a clone or pool: `rm -rf .` and `rm -rf ..` are the
-// shapes. The filesystem root is an ancestor like any other, so the prefix is
-// normalized rather than concatenated - `/` + `/` would never match. Resolution
-// is deliberately limited to self-or-ancestor, because resolving every operand
-// would deny an ordinary `rm -rf build` there too.
+// resolves to the directory the command runs in, or to an ancestor of it: `rm -rf .`,
+// `rm -rf ..` and `rm -rf *` are the shapes. The filesystem root is an ancestor
+// like any other, so the prefix is normalized rather than concatenated - `/` + `/`
+// would never match. Resolution is deliberately limited to self-or-ancestor,
+// because resolving every operand would deny an ordinary `rm -rf build` too.
 function removesOwnDirectory(value, cwd) {
-  const resolved = path.resolve(cwd, value);
+  const resolved = path.resolve(cwd, removalScope(value));
   const directory = path.resolve(cwd);
   if (directory === resolved) return true;
   const prefix = resolved.endsWith(path.sep) ? resolved : `${resolved}${path.sep}`;
@@ -180,7 +185,7 @@ function removalDestroys(words, cwd) {
   // current directory. Both operand rules agree it is not a target.
   const targets = operands.filter((operand) => operand !== "");
   if (targets.some(isProtectedRemovalTarget)) return true;
-  return insideCloneOrPool(cwd) && targets.some((target) => removesOwnDirectory(target, cwd));
+  return targets.some((target) => removesOwnDirectory(target, cwd));
 }
 
 // Resolve git's global options to the subcommand, the effective directory after
@@ -210,6 +215,10 @@ function pushDestroys(words) {
   const { options, operands } = splitArguments(words);
   if (options.some(isDeleteOption)) return true;
   if (options.some(isForceOption)) return true;
+  // --mirror removes every remote ref with no local counterpart and --prune
+  // removes the remote refs outside the pushed refspec, so both reach a
+  // colleague's branch the way an explicit delete does.
+  if (options.some((option) => isLongAbbreviation(option, "--mirror") || isLongAbbreviation(option, "--prune"))) return true;
   // A refspec beginning with ':' deletes the destination ref; a '+' prefix makes
   // the update forced. A colon INSIDE a refspec is an ordinary update.
   return operands.some((operand) => operand.startsWith(":") || operand.startsWith("+"));
