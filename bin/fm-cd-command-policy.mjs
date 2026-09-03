@@ -15,7 +15,7 @@
 // never evaluates, expands, sources, or runs any byte of the submitted command;
 // it inspects lexical command positions only.
 
-import { Lexer, splitProgram, commandPosition } from "./fm-arm-command-policy.mjs";
+import { Lexer, splitProgram, commandPosition, CD_BUILTINS } from "./fm-arm-command-policy.mjs";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -23,9 +23,6 @@ const REASONS = {
   "persistent-cd":
     "a persistent top-level directory change in the primary firstmate checkout is blocked; it would move the shell out of the home so a later firstmate-owned command runs inside a project clone. Reach the target without moving the shell - use git -C <dir>, make -C <dir>, or an absolute path on the command itself. A subshell (cd <dir> && ...) also avoids the move, but it hides the command inside it from the other PreToolUse seatbelts, so prefer the -C form.",
 };
-
-// Directory-changing builtins that mutate the calling shell's own cwd.
-const CD_BUILTINS = new Set(["cd", "pushd", "popd"]);
 
 // Wrappers that fork or exec a child before reaching the builtin, so a cd behind
 // them never persists to the parent shell (and generally just fails, since cd is

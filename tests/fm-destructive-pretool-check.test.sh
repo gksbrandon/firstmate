@@ -113,6 +113,10 @@ matrix_case R20 deny home destructive-rm 'rm -rf projects'
 matrix_case R21 deny home destructive-rm 'rm -rf *'
 matrix_case R22 deny pool destructive-rm 'rm -rf ./*'
 matrix_case R23 deny neutral destructive-rm 'rm -rf .'
+# The explicit-path tests read the operand's own bytes, so a preceding cd does
+# not stand them down the way it stands down the self-or-ancestor test below.
+matrix_case R24 deny home destructive-rm 'cd build && rm -rf projects/FAS'
+matrix_case R25 deny home destructive-rm 'cd /tmp/scratch && rm -rf "$WORKTREE/.git"'
 
 # ALLOW: a removal that is not both recursive and forced, or not a fleet path.
 matrix_case r01 allow neutral '' 'rm -rf build'
@@ -136,6 +140,16 @@ matrix_case r12 allow home '' 'rm -rf build'
 matrix_case r13 allow home '' 'rm -rf node_modules'
 matrix_case r14 allow home '' 'rm -rf build/*'
 matrix_case r15 allow home '' 'rm -rf .cache/http/*'
+matrix_case r16 allow home '' 'rm -rf dist/assets'
+# A cd earlier in the list moves the removal somewhere the hook never saw, so
+# resolving the operand against the hook's directory would misattribute it.
+# These three shapes are the regression: each denied while the rule was
+# unconditional, and each removes something the guard has no claim over.
+matrix_case r17 allow home '' 'cd build && rm -rf *'
+matrix_case r18 allow home '' 'cd /tmp/scratch && rm -rf .'
+matrix_case r19 allow home '' 'mkdir -p out && cd out && rm -rf *'
+matrix_case r20 allow pool '' 'cd build && rm -rf *'
+matrix_case r21 allow home '' 'pushd build && rm -rf * && popd'
 
 # DENY: a push that deletes or force-updates a remote ref, against any remote.
 matrix_case P01 deny neutral destructive-push 'git push origin --delete rtc/s7-candidate'

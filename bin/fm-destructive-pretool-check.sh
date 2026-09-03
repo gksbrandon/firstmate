@@ -63,7 +63,8 @@ toolInput.command, or Claude/Codex/Cursor tool_input.command).
 Fires in any firstmate checkout, primary or task worktree; it is a silent no-op
 in a non-firstmate repo.
 Exits 0 to allow and 2 to deny a recursive forced removal of a pool worktree,
-a .git path or a projects/ clone; a remote-ref deleting or force-updating push;
+a .git path, a projects/ clone, or the current directory or one of its
+ancestors; a push that deletes, force-updates, mirrors or prunes a remote ref;
 or a branch force-delete, hard reset, clean, or filter-branch inside a project
 clone or pool worktree.
 Set FM_ALLOW_DESTRUCTIVE=1 in the environment to allow a deliberate exception.

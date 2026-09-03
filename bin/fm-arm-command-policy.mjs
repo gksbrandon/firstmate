@@ -7,8 +7,8 @@
 //
 // This file is the sole owner of firstmate's shell command classification.
 // The tokenizer and command-position analysis (Lexer, splitProgram,
-// commandPosition, SHELL_KEYWORDS, withoutLeadingKeywords) are exported so the
-// sibling cd-guard and destructive-command policies
+// commandPosition, SHELL_KEYWORDS, withoutLeadingKeywords, CD_BUILTINS) are
+// exported so the sibling cd-guard and destructive-command policies
 // (bin/fm-cd-command-policy.mjs, bin/fm-destructive-command-policy.mjs) reuse
 // the same proven parser instead of duplicating shell lexing; see
 // docs/cd-guard.md and docs/destructive-guard.md. The watcher-arm decision
@@ -543,6 +543,12 @@ function consumeWrapperOptions(name, words, index) {
   }
   return { index: next, unresolved: false, embeddedPayloads };
 }
+
+// Builtins that change the calling shell's own working directory, so every node
+// after one of them runs somewhere this classifier cannot compute. The cd-guard
+// keys its whole decision on them; the destructive-command guard uses them to
+// stand down the rule that resolves an operand against the current directory.
+export const CD_BUILTINS = new Set(["cd", "pushd", "popd"]);
 
 // Shell reserved words that open or continue a compound command. A node that
 // starts with one carries a compound grammar this classifier does not model, so

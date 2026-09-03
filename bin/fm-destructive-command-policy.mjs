@@ -22,7 +22,9 @@
 //   rm      recursive AND force (flags in any order, clustered or separate)
 //           with an operand naming a pool worktree, a path carrying a .git
 //           component, or a projects/ clone path, or an operand that resolves
-//           to the current directory or one of its ancestors.
+//           to the current directory or one of its ancestors. That last test
+//           needs a known directory, so an earlier cd in the same command list
+//           stands it down; the explicit-path tests still apply.
 //   git push  carrying a delete flag, a force flag (both long or short), a
 //           mirror or prune flag, a refspec beginning with ':', or a
 //           plus-prefixed refspec, against any remote. A plain
@@ -40,7 +42,7 @@ import path from "node:path";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { Lexer, splitProgram, commandPosition, withoutLeadingKeywords } from "./fm-arm-command-policy.mjs";
+import { Lexer, splitProgram, commandPosition, withoutLeadingKeywords, CD_BUILTINS } from "./fm-arm-command-policy.mjs";
 
 const ESCAPE = "Launch the session with FM_ALLOW_DESTRUCTIVE=1 for a deliberate, authorized exception.";
 
@@ -176,7 +178,7 @@ function removesOwnDirectory(value, cwd) {
   return directory.startsWith(prefix);
 }
 
-function removalDestroys(words, cwd) {
+function removalDestroys(words, cwd, directoryKnown) {
   const { options, operands } = splitArguments(words);
   const recursive = options.some(isRecursiveOption);
   const force = options.some(isForceOption);
@@ -185,7 +187,7 @@ function removalDestroys(words, cwd) {
   // current directory. Both operand rules agree it is not a target.
   const targets = operands.filter((operand) => operand !== "");
   if (targets.some(isProtectedRemovalTarget)) return true;
-  return targets.some((target) => removesOwnDirectory(target, cwd));
+  return directoryKnown && targets.some((target) => removesOwnDirectory(target, cwd));
 }
 
 // Resolve git's global options to the subcommand, the effective directory after
@@ -246,6 +248,9 @@ function decision(command, cwd) {
   if (lexed.error) return { decision: "allow" };
 
   const { nodes } = splitProgram(lexed.tokens);
+  // A cd earlier in the list moves the shell the removal will run in, so the
+  // operand can no longer be resolved against the directory the hook read.
+  let directoryKnown = true;
   for (const node of nodes) {
     // commandPosition skips leading assignments and forking wrappers, and
     // contributes no command word for quoted data, comments, substitutions, or
@@ -258,8 +263,12 @@ function decision(command, cwd) {
     const words = position.words.slice(position.index + 1);
     const name = basename(position.command.value);
 
+    if (CD_BUILTINS.has(name)) {
+      directoryKnown = false;
+      continue;
+    }
     if (name === "rm") {
-      if (removalDestroys(words, cwd)) return deny("destructive-rm");
+      if (removalDestroys(words, cwd, directoryKnown)) return deny("destructive-rm");
       continue;
     }
     if (name !== "git") continue;
