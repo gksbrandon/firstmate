@@ -12,7 +12,8 @@
 # tasks-axi update advertises --archive-body, whether its mv help advertises
 # multi-ID moves, whether quota-axi is on PATH,
 # whether the local backend config opts out of tasks-axi backlog mutations,
-# which no-mistakes version is on PATH, which gh-axi version is on PATH, and
+# which no-mistakes version is on PATH and whether a later version number
+# follows it on another line, which gh-axi version is on PATH, and
 # which lavish-axi version is on PATH.
 # Dedicated fleet-sync cases pin the computed bootstrap timeout, explicit
 # override, blank-env defaulting, partial-output relay, and pre-launch timeout
@@ -80,6 +81,7 @@ SH
 #!/usr/bin/env bash
 if [ "${1:-}" = --version ]; then
   printf '%s\n' "${FM_FAKE_NO_MISTAKES_VERSION:-no-mistakes version v1.31.2 (fake) 2026-06-27T00:02:18Z}"
+  [ -z "${FM_FAKE_NO_MISTAKES_EXTRA_LINE:-}" ] || printf '%s\n' "$FM_FAKE_NO_MISTAKES_EXTRA_LINE"
   exit 0
 fi
 exit 0
@@ -311,11 +313,17 @@ ROWS
   pass "bootstrap reports treehouse lease + tasks-axi/quota-axi bootstrap contracts"
 }
 
+# The floor is read from no-mistakes' own version line only. A build that reports
+# no readable major.minor.patch there - the captain's fork, built from a git
+# checkout, is stamped 0-unstable-<sha> - is installed and usable, so it reports
+# no MISSING line and discloses the unchecked floor only as a verbose fact. A
+# later version number on any following line (an update nag) is never the
+# installed build's own version and can never satisfy the floor.
 test_no_mistakes_min_version() {
-  local label version mode case_dir fakebin out missing n
+  local label version extra token mode case_dir fakebin out verbose missing info n
   missing='MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)'
   n=0
-  while IFS='^' read -r label version mode; do
+  while IFS='^' read -r label version extra token mode; do
     [ -n "$label" ] || continue
     n=$((n + 1))
     case_dir="$TMP_ROOT/no-mistakes-$n"
@@ -324,19 +332,37 @@ test_no_mistakes_min_version() {
     printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
     fakebin=$(make_fake_toolchain "$case_dir")
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-      FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_NO_MISTAKES_VERSION="$version" "$ROOT/bin/fm-bootstrap.sh")
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_NO_MISTAKES_VERSION="$version" \
+      FM_FAKE_NO_MISTAKES_EXTRA_LINE="$extra" "$ROOT/bin/fm-bootstrap.sh")
     case "$mode" in
       empty)
         [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
       missing)
         [ "$out" = "$missing" ] || fail "$label: expected '$missing', got: $out" ;;
+      unverifiable)
+        [ -z "$out" ] || fail "$label: expected silence by default, got: $out"
+        info="BOOTSTRAP_INFO: no-mistakes version unverifiable ($token); floor 1.31.2 not checked"
+        verbose=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+          FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_NO_MISTAKES_VERSION="$version" \
+          FM_FAKE_NO_MISTAKES_EXTRA_LINE="$extra" FM_BOOTSTRAP_VERBOSE_FACTS=1 "$ROOT/bin/fm-bootstrap.sh")
+        printf '%s\n' "$verbose" | grep -Fx "$info" >/dev/null \
+          || fail "$label: missing '$info' (got: $verbose)"
+        if printf '%s\n' "$verbose" | grep -F 'MISSING: no-mistakes' >/dev/null; then
+          fail "$label: unexpected no-mistakes upgrade prompt in: $verbose"
+        fi
+        ;;
     esac
   done <<'ROWS'
-minimum no-mistakes version is accepted^no-mistakes version v1.31.2 (fake)^empty
-newer no-mistakes minor is accepted^no-mistakes version v1.32.0 (fake)^empty
-newer no-mistakes major is accepted^no-mistakes version v2.0.0 (fake)^empty
-older no-mistakes patch reports an upgrade^no-mistakes version v1.31.1 (fake)^missing
-unparseable no-mistakes version reports an upgrade^no-mistakes development build^missing
+minimum no-mistakes version is accepted^no-mistakes version v1.31.2 (fake)^^^empty
+minimum no-mistakes version without a v prefix is accepted^no-mistakes version 1.31.2^^^empty
+newer no-mistakes minor is accepted^no-mistakes version v1.32.0 (fake)^^^empty
+newer no-mistakes major is accepted^no-mistakes version v2.0.0 (fake)^^^empty
+older no-mistakes patch reports an upgrade^no-mistakes version v1.31.1 (fake)^^^missing
+older no-mistakes minor reports an upgrade^no-mistakes version 1.30.0^^^missing
+an update nag never lifts an older build over the floor^no-mistakes version 1.30.0^A new version of no-mistakes is available: 1.30.0 -> v1.60.2^^missing
+the captain's fork build is present, not missing^no-mistakes version v0-unstable-9f4698d (9f4698d) unknown^^v0-unstable-9f4698d^unverifiable
+an update nag after an unreadable version never satisfies the floor^no-mistakes version v0-unstable-9f4698d (9f4698d) unknown^A new version of no-mistakes is available: v0-unstable-9f4698d -> v1.60.2^v0-unstable-9f4698d^unverifiable
+an unlabelled development build is present, not missing^no-mistakes development build^^no-mistakes development build^unverifiable
 ROWS
   pass "bootstrap enforces no-mistakes minimum version"
 }
