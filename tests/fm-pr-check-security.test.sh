@@ -3463,6 +3463,56 @@ test_gitlab_merged_poll_retires() {
   pass "GitHub and GitLab exact merged results share one retirement path"
 }
 
+test_migration_resolves_os_once_regardless_of_poll_count() {
+  local count_few count_many max real_uname
+  real_uname=$(PATH="$BASE_PATH" command -v uname) || fail "uname not found on the base PATH"
+
+  # arm_and_count <case-name> <poll-count>: build a home, arm that many valid
+  # canonical PR polls through fm-pr-check.sh, then run the pre-lock migration
+  # with a counting uname shim first on PATH and echo the uname invocation count.
+  arm_and_count() {
+    local name=$1 n=$2 dir shim log i armed
+    dir=$(make_case "$name")
+    shim="$dir/uname-shim"
+    log="$dir/uname.count"
+    mkdir -p "$shim"
+    : > "$log"
+    cat > "$shim/uname" <<SH
+#!/usr/bin/env bash
+printf 'x\n' >> "$log"
+exec "$real_uname" "\$@"
+SH
+    chmod +x "$shim/uname"
+    i=1
+    while [ "$i" -le "$n" ]; do
+      write_task_meta "$dir" "poll-$i"
+      run_check_entry "$dir" "poll-$i" "https://github.com/o/r/pull/$i" >/dev/null 2>/dev/null \
+        || fail "could not arm poll poll-$i"
+      i=$((i + 1))
+    done
+    armed=$(find "$dir/home/state" -maxdepth 1 -name 'poll-*.check.sh' | wc -l | tr -d ' ')
+    [ "$armed" -eq "$n" ] || fail "expected $n armed polls in $name, found $armed"
+    FM_HOME="$dir/home" PATH="$shim:$BASE_PATH" "$MIGRATE" --checks-safe >/dev/null 2>/dev/null \
+      || fail "migration did not complete on $name"
+    wc -l < "$log" | tr -d ' '
+  }
+
+  count_few=$(arm_and_count uname-count-few 4)
+  count_many=$(arm_and_count uname-count-many 16)
+
+  # Resolving the OS once per process makes the count a small constant (one or
+  # two loads) that does not scale with poll count. The per-call version forked
+  # uname in every poll-file stat helper - here 76 calls at 4 polls, 280 at 16.
+  # The bound stays well under that growth while allowing benign load-time
+  # variation; the equality below is the invariant that must not scale with N.
+  max=8
+  [ "$count_many" -le "$max" ] \
+    || fail "migration forked uname $count_many times for 16 polls (must be <= $max: resolve the OS once, not per poll line)"
+  [ "$count_many" -eq "$count_few" ] \
+    || fail "uname invocations grew with poll count (4 polls: $count_few, 16 polls: $count_many)"
+  pass "pre-lock migration resolves the OS once per process, not per poll line (4 and 16 polls both forked uname $count_many times)"
+}
+
 test_parser_matrix
 test_gitlab_merge_watch
 test_merged_poll_retires_once
@@ -3501,3 +3551,4 @@ test_bootstrap_isolates_incomplete_poll_migration
 test_custom_snapshot_cleanup_on_signal
 test_returned_custom_check_descendants_are_drained
 test_teardown_removes_poll_artifacts
+test_migration_resolves_os_once_regardless_of_poll_count

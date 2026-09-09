@@ -87,10 +87,15 @@ fmx_poll_shim_v1_content() {
     "exec $(printf '%q' "$root/bin/fm-x-poll.sh")"
 }
 
+# Resolve the OS once per process; these stat helpers run per poll file while the
+# PR-check migration validates shims, where forking uname each call stalled the
+# watcher arm. Reuse fm-wake-lib.sh's cache when present so load order is moot.
+: "${_FM_UNAME:=$(uname 2>/dev/null || echo unknown)}"
+
 fmx_single_link_file_valid() {
   local file=$1 expected_device=${2-} links device
   [ -f "$file" ] && [ ! -L "$file" ] || return 1
-  if [ "$(uname)" = Darwin ]; then
+  if [ "$_FM_UNAME" = Darwin ]; then
     links=$(stat -f %l "$file" 2>/dev/null) || return 1
     device=$(stat -f %d "$file" 2>/dev/null) || return 1
   else
@@ -104,7 +109,7 @@ fmx_single_link_file_valid() {
 fmx_single_link_file_mode_valid() {
   local file=$1 expected_mode=$2 expected_device=${3-} mode
   fmx_single_link_file_valid "$file" "$expected_device" || return 1
-  if [ "$(uname)" = Darwin ]; then
+  if [ "$_FM_UNAME" = Darwin ]; then
     mode=$(stat -f %Lp "$file" 2>/dev/null) || return 1
   else
     mode=$(stat -c %a "$file" 2>/dev/null) || return 1
@@ -115,7 +120,7 @@ fmx_single_link_file_mode_valid() {
 fmx_private_artifact_dir_device() {
   local dir=$1 mode device
   [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
-  if [ "$(uname)" = Darwin ]; then
+  if [ "$_FM_UNAME" = Darwin ]; then
     mode=$(stat -f %Lp "$dir" 2>/dev/null) || return 1
     device=$(stat -f %d "$dir" 2>/dev/null) || return 1
   else

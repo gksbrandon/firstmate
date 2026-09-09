@@ -93,8 +93,13 @@ fm_config_inherit_items() {
   printf '%s\n' "$FM_SHARED_CAPTAIN_REL"
 }
 
+# Resolve the OS once per process rather than forking uname in each stat helper;
+# these run per item while validating inherited config. Reuse fm-wake-lib.sh's
+# cache when present so load order does not matter.
+: "${_FM_UNAME:=$(uname 2>/dev/null || echo unknown)}"
+
 fm_inherit_file_mode() {
-  if [ "$(uname)" = Darwin ]; then
+  if [ "$_FM_UNAME" = Darwin ]; then
     stat -f %Lp "$1" 2>/dev/null
   else
     stat -c %a "$1" 2>/dev/null
@@ -102,7 +107,7 @@ fm_inherit_file_mode() {
 }
 
 fm_inherit_file_device() {
-  if [ "$(uname)" = Darwin ]; then
+  if [ "$_FM_UNAME" = Darwin ]; then
     stat -f %d "$1" 2>/dev/null
   else
     stat -c %d "$1" 2>/dev/null
@@ -110,7 +115,7 @@ fm_inherit_file_device() {
 }
 
 fm_inherit_file_link_count() {
-  if [ "$(uname)" = Darwin ]; then
+  if [ "$_FM_UNAME" = Darwin ]; then
     stat -f %l "$1" 2>/dev/null
   else
     stat -c %h "$1" 2>/dev/null
