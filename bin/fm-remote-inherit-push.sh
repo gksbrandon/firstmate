@@ -26,8 +26,10 @@ die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi
 }
+# Resolve the OS once; file_link_count runs per inherited item in the push loop.
+: "${_FM_UNAME:=$(uname 2>/dev/null || echo unknown)}"
 file_link_count() {
-  if [ "$(uname)" = Darwin ]; then stat -f %l "$1" 2>/dev/null; else stat -c %h "$1" 2>/dev/null; fi
+  if [ "$_FM_UNAME" = Darwin ]; then stat -f %l "$1" 2>/dev/null; else stat -c %h "$1" 2>/dev/null; fi
 }
 shared_captain_header_valid() {
   local head
